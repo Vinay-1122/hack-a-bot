@@ -22,11 +22,63 @@ def init_session_state():
         "python_code_editable": "", # For Python editor
         "show_python_editor": False,
         "user_question_input_key": 0, # To help reset input field
-        "db_initialized": False # Track if DB has data
+        "db_initialized": False, # Track if DB has data
+        "fixed_code_available": False, # Track if fixed code is available
+        "current_error_message": None, # Track current error message
+        "fix_button_clicked": False, # Track if fix button was clicked
+        "editor_key": 0, # Track editor updates
+        "new_code": "", # Store new code temporarily
+        "new_code_available": False # Flag for new code
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+def handle_fix_button_click():
+    """Callback function for the Fix with AI button"""
+    try:
+        with st.spinner("AI is analyzing and fixing the code..."):
+            fix_payload = {
+                "code": st.session_state.python_code_editable,
+                "error": st.session_state.current_error_message,
+                "user_api_key": st.session_state.gemini_api_key or None,
+                "model_name": st.session_state.selected_model
+            }
+            
+            # Make the POST request
+            fix_response = requests.post(
+                f"{API_URL}/fix-python-code/",
+                json=fix_payload,
+                timeout=60
+            )
+            
+            if fix_response.status_code == 200:
+                fixed_code = fix_response.json().get("fixed_code")
+                if fixed_code:
+                    # Store the new code and set flag
+                    st.session_state.new_code = fixed_code
+                    st.session_state.new_code_available = True
+                    # Increment editor key to force update
+                    st.session_state.editor_key += 1
+                    st.success("Code has been fixed by AI. You can review and run it again.")
+                    # Reset the fix button state
+                    st.session_state.fix_button_clicked = False
+                    st.session_state.current_error_message = None
+                    # Force a rerun to update the editor
+                    st.rerun()
+                else:
+                    st.error("AI couldn't generate a fix for the code.")
+                    st.session_state.fix_button_clicked = False
+            else:
+                st.error(f"Error from server: {fix_response.text}")
+                st.session_state.fix_button_clicked = False
+                
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error getting AI fix: {e.response.text if e.response else str(e)}")
+        st.session_state.fix_button_clicked = False
+    except Exception as e:
+        st.error(f"Error during AI code fixing: {str(e)}")
+        st.session_state.fix_button_clicked = False
 
 init_session_state()
 
@@ -374,13 +426,24 @@ if st.session_state.chat_history:
                 if required_packages:
                     st.caption(f"Suggested packages for script: `{'`, `'.join(required_packages)}`")
                 
-                st.session_state.python_code_editable = st.text_area(
-                    "Python Code Editor:",
-                    value=generated_python_script, # Use the initially generated script
-                    height=400,
-                    key="python_code_editor_main_area",
-                    help="Edit the script if needed. Ensure the script prints results to stdout or saves a plot as 'plot.png'."
-                )
+                # Create a container for the code editor
+                editor_container = st.container()
+                
+                # Update the code editor within the container
+                with editor_container:
+                    # Force a rerun if we have new code
+                    if st.session_state.get("new_code_available", False):
+                        st.session_state.python_code_editable = st.session_state.get("new_code", "")
+                        st.session_state.new_code_available = False
+                        st.rerun()
+                    
+                    st.session_state.python_code_editable = st.text_area(
+                        "Python Code Editor:",
+                        value=st.session_state.python_code_editable,
+                        height=400,
+                        key=f"python_code_editor_main_area_{st.session_state.editor_key}",
+                        help="Edit the script if needed. Ensure the script prints results to stdout or saves a plot as 'plot.png'."
+                    )
 
                 if st.button("▶️ Run Python Script in Sandbox", key="run_python_button_main"):
                     if st.session_state.python_code_editable:
@@ -427,7 +490,25 @@ if st.session_state.chat_history:
                                 if python_run_results.get("error"):
                                     st.markdown("##### Script Error Output (stderr):")
                                     st.code(python_run_results.get("error"), language="text")
-                                
+                                    st.session_state.current_error_message = python_run_results.get("error")
+                                else:
+                                    st.session_state.current_error_message = None
+
+                                # Check for errors in the script output (from print_error_summary)
+                                output_text = python_run_results.get("output", "")
+                                if "Error Summary:" in output_text:
+                                    st.markdown("##### Error from Script Output:")
+                                    st.code(output_text, language="text")
+                                    if not st.session_state.current_error_message:  # Only set if we don't have a direct error
+                                        st.session_state.current_error_message = output_text
+
+                                # Add Fix with AI button if there's any error
+                                if st.session_state.current_error_message:
+                                    if st.button("🤖 Fix with AI", 
+                                               key=f"fix_with_ai_button_{st.session_state.user_question_input_key}",
+                                               on_click=handle_fix_button_click):
+                                        pass  # The callback will handle everything
+
                                 python_plot_b64 = python_run_results.get("plot_base64")
                                 if python_plot_b64:
                                     st.markdown("##### Plot from Python Script:")

@@ -194,6 +194,12 @@ class ExecutePythonRequest(BaseModel):
     script: str
     user_api_key: str | None = None # For consistency if needed by sandbox
 
+class FixCodeRequest(BaseModel):
+    code: str
+    error: str
+    user_api_key: str | None = None
+    model_name: str = "gemini-1.5-flash"
+
 # --- Helper Functions ---
 def get_db_connection(db_path: str = DB_PATH):
     conn = sqlite3.connect(db_path)
@@ -995,6 +1001,52 @@ async def clear_database_endpoint():
         return {"message": f"Successfully cleared database. Removed {len(tables)} tables."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error clearing database: {str(e)}")
+
+@app.post("/fix-python-code/")
+async def fix_python_code_endpoint(request: FixCodeRequest):
+    """
+    Uses LLM to fix Python code based on the error message.
+    """
+    try:
+        if genai is None:
+            raise HTTPException(status_code=500, detail="Gemini API module not installed. Install with 'pip install google-generativeai'")
+            
+        model = configure_gemini(request.user_api_key, request.model_name)
+        
+        prompt = f"""
+        You are an expert Python developer. Fix the following Python code that has an error.
+        The code should use only these helper functions:
+        - get_db_connection_from_script() -> sqlite3.Connection
+        - execute_sql_with_validation(query: str) -> pd.DataFrame
+        - save_plot_with_validation(fig: plt.Figure, title: str = None) -> None
+        - print_error_summary(error: Exception) -> None
+
+        Do not redefine these functions, just use them.
+        Always include visualization unless explicitly not needed.
+        Use proper error handling.
+
+        Original code:
+        ```python
+        {request.code}
+        ```
+
+        Error message:
+        {request.error}
+
+        Provide the fixed code. Respond ONLY with the fixed Python code, no explanations or markdown.
+        """
+        
+        response = model.generate_content(prompt)
+        fixed_code = response.text.strip()
+        
+        # Clean up the response to ensure it's just the code
+        fixed_code = re.sub(r'```python\s*', '', fixed_code)
+        fixed_code = re.sub(r'\s*```', '', fixed_code)
+        
+        return {"fixed_code": fixed_code}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fixing code: {str(e)}")
 
 # --- To run the app (from terminal) ---
 # uvicorn main:app --reload --host 0.0.0.0 --port 8000
