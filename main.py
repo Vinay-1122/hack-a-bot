@@ -36,13 +36,141 @@ except ImportError:
     print("WARNING: kagglehub not installed. Kaggle dataset loading will not work.")
     kagglehub = None
 
+try:
+    from sentence_transformers import SentenceTransformer
+    import faiss
+    import pickle
+except ImportError:
+    print("WARNING: sentence-transformers or faiss not installed. RAG features will not work.")
+    SentenceTransformer = None
+    faiss = None
+
 # --- Configuration ---
 DATA_DIR = "data"
 DB_PATH = os.path.join(DATA_DIR, "analytics_db.sqlite")
 DEFAULT_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+VECTOR_STORE_PATH = os.path.join(DATA_DIR, "schema_vector_store")
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # Lightweight but effective model
 
 # Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
+
+class VectorStore:
+    def __init__(self, store_path: str, model_name: str = EMBEDDING_MODEL):
+        self.store_path = store_path
+        self.index_path = os.path.join(store_path, "faiss_index.bin")
+        self.metadata_path = os.path.join(store_path, "metadata.pkl")
+        self.model = SentenceTransformer(model_name) if SentenceTransformer else None
+        self.index = None
+        self.metadata = []
+        self.dimension = 384  # Dimension for all-MiniLM-L6-v2
+        
+        if os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
+            self.load()
+        else:
+            self.initialize()
+
+    def initialize(self):
+        """Initialize a new FAISS index."""
+        if not self.model:
+            raise ImportError("SentenceTransformer not available")
+        self.index = faiss.IndexFlatL2(self.dimension)
+        self.metadata = []
+
+    def load(self):
+        """Load existing index and metadata."""
+        if not self.model:
+            raise ImportError("SentenceTransformer not available")
+        self.index = faiss.read_index(self.index_path)
+        with open(self.metadata_path, 'rb') as f:
+            self.metadata = pickle.load(f)
+
+    def save(self):
+        """Save index and metadata to disk."""
+        if self.index is not None:
+            faiss.write_index(self.index, self.index_path)
+            with open(self.metadata_path, 'wb') as f:
+                pickle.dump(self.metadata, f)
+
+    def add_schema_entries(self, schema: dict):
+        """Add schema entries to the vector store."""
+        if not self.model:
+            raise ImportError("SentenceTransformer not available")
+        
+        # Clear existing data
+        self.initialize()
+        
+        # Process schema into text chunks
+        entries = []
+        for table_name, table_info in schema.items():
+            # Create table-level entry
+            table_desc = f"Table {table_name}: {table_info.get('description', 'No description')}"
+            entries.append(table_desc)
+            
+            # Create column-level entries
+            for column in table_info.get('columns', []):
+                col_desc = f"Column {table_name}.{column['name']}: {column.get('description', 'No description')} (Type: {column['type']})"
+                entries.append(col_desc)
+        
+        # Generate embeddings and add to index
+        embeddings = self.model.encode(entries)
+        self.index.add(np.array(embeddings).astype('float32'))
+        self.metadata = entries
+        self.save()
+
+    def search(self, query: str, k: int = 5) -> List[str]:
+        """Search for relevant schema entries."""
+        if not self.model or not self.index:
+            raise ImportError("Vector store not properly initialized")
+        
+        # Generate query embedding
+        query_embedding = self.model.encode([query])[0]
+        
+        # Search the index
+        distances, indices = self.index.search(
+            np.array([query_embedding]).astype('float32'), 
+            min(k, len(self.metadata))
+        )
+        
+        # Return relevant entries
+        return [self.metadata[i] for i in indices[0]]
+
+def get_relevant_schema_from_rag(question: str, db_schema: dict) -> str:
+    """
+    Retrieve relevant schema information using RAG.
+    If vector store is empty, it will be populated with the current schema.
+    """
+    if not SentenceTransformer or not faiss:
+        print("RAG dependencies not available. Returning full schema.")
+        return f"DATABASE SCHEMA:\n{json.dumps(db_schema, indent=2)}"
+    
+    try:
+        # Initialize vector store
+        vector_store = VectorStore(VECTOR_STORE_PATH)
+        
+        # If vector store is empty, populate it
+        if len(vector_store.metadata) == 0:
+            print("Populating vector store with schema information...")
+            vector_store.add_schema_entries(db_schema)
+        
+        # Search for relevant schema entries
+        relevant_entries = vector_store.search(question)
+        
+        if not relevant_entries:
+            return f"DATABASE SCHEMA:\n{json.dumps(db_schema, indent=2)}"
+        
+        # Format the relevant entries
+        schema_context = "RELEVANT SCHEMA INFORMATION:\n"
+        schema_context += "\n".join(relevant_entries)
+        schema_context += "\n\nFULL SCHEMA:\n"
+        schema_context += json.dumps(db_schema, indent=2)
+        
+        return schema_context
+        
+    except Exception as e:
+        print(f"Error in RAG schema retrieval: {e}")
+        return f"DATABASE SCHEMA:\n{json.dumps(db_schema, indent=2)}"
 
 # --- FastAPI App ---
 app = FastAPI(title="Enhanced Analytics Bot API")
@@ -176,15 +304,6 @@ def generate_plot(df, chart_type, x_column=None, y_column=None, title=None):
         print(f"Error generating plot: {e}\n{traceback.format_exc()}")
         plt.close()
         return None
-
-def get_relevant_schema_from_rag(question: str, db_schema: dict):
-    """
-    Placeholder for RAG schema retrieval.
-    In a real implementation, this would query a vector store.
-    For now, it just returns a message and the full schema.
-    """
-    print("RAG for schema is enabled, but using placeholder. Returning full schema.")
-    return f"DATABASE SCHEMA (RAG Placeholder - Full Schema Shown):\n{json.dumps(db_schema, indent=2)}"
 
 # --- Data Loading Functions ---
 def _clean_column_name(col_name):
@@ -409,8 +528,6 @@ async def analyze_query_endpoint(request: QueryRequest):
 
         schema_context_for_llm = ""
         if request.use_rag_for_schema:
-            # In a real RAG setup, this would query a vector store.
-            # For now, it's a placeholder.
             schema_context_for_llm = get_relevant_schema_from_rag(request.question, db_schema)
         else:
             schema_context_for_llm = f"DATABASE SCHEMA:\n{json.dumps(db_schema, indent=2)}"
@@ -420,41 +537,45 @@ async def analyze_query_endpoint(request: QueryRequest):
             "You will be given a database schema (or relevant parts of it), a semantic schema (business context), and a user question.",
             "Follow these instructions:",
             "1. Understand the question, database schema, and semantic schema.",
-            "2. Determine the best analysis type based on these strict criteria:",
-            "   - Use 'sql' ONLY if:",
+            "2. ALWAYS try to solve the problem using SQL first. Only use Python if SQL is absolutely insufficient.",
+            "3. Determine the best analysis type based on these strict criteria:",
+            "   - Use 'sql' if ANY of these are true:",
             "     * The question can be answered with standard SQL operations (SELECT, JOIN, GROUP BY, etc.)",
-            "     * No complex data transformations or statistical analysis is needed",
             "     * The data can be aggregated and filtered using SQL functions",
             "     * The visualization can be created from the SQL results directly",
-            "   - Use 'python' if ANY of these are true:",
-            "     * Complex data transformations or statistical analysis is needed",
-            "     * Advanced visualization requirements (beyond basic charts)",
-            "     * Need for machine learning or statistical modeling",
-            "     * Complex data cleaning or preprocessing required",
-            "     * Time series analysis or advanced aggregations needed",
-            "     * Custom calculations or business logic required",
-            "3. If 'sql':",
+            "     * The analysis involves basic data retrieval or filtering",
+            "     * The question asks for counts, sums, averages, or other basic aggregations",
+            "     * The question involves joining tables or filtering data",
+            "   - Use 'python' ONLY if ALL of these are true:",
+            "     * SQL cannot handle the required data transformations",
+            "     * Complex statistical analysis is needed",
+            "     * Advanced visualization requirements beyond basic charts",
+            "     * Machine learning or statistical modeling is required",
+            "     * Complex data cleaning or preprocessing is needed",
+            "     * Time series analysis with advanced features is required",
+            "     * Custom calculations that cannot be done in SQL are needed",
+            "4. If 'sql':",
             "   - Generate a valid SQLite query.",
-            "   - Suggest chart type ('bar', 'line', 'scatter', 'pie', 'hist', 'table'), x-column, y-column, and title.",
-            "4. If 'python':",
-            "   - State that Python is needed and briefly explain why.",
-            "   - Generate a Python script with proper error handling and data validation.",
-            "   - The script should assume it has access to the SQLite database at 'data/analytics_db.sqlite'.",
-            "   - Include necessary imports and setup code.",
-            "   - Add comments explaining complex operations.",
-            "   - The script should print its final result (e.g., a summary, a transformed DataFrame as JSON string, or a message) to standard output.",
-            "   - If generating a plot, it should save it to 'plot.png' and this will be handled by the execution environment.",
-            "   - IMPORTANT: Only use these Python packages: pandas, numpy, matplotlib, seaborn, scikit-learn, statsmodels, nltk, scipy, regex, pillow.",
-            "   - Do not use any other packages. If a task requires a package not in this list, find an alternative approach using the allowed packages.",
-            "   - IMPORTANT: The following helper functions are available in the script environment:",
-            "     * get_db_connection_from_script() -> sqlite3.Connection",
-            "     * execute_sql_with_validation(query: str) -> pd.DataFrame",
-            "     * print_df_as_json(df: pd.DataFrame) -> None",
-            "     * save_plot_with_validation(fig: plt.Figure, title: str = None) -> None",
-            "     * print_error_summary(error: Exception) -> None",
-            "   - Use these helper functions when appropriate instead of writing custom code.",
-            "5. If the question is too ambiguous or beyond reasonable analytical scope with the given tools, set analysis_type to 'complex' and explain.",
-            "6. Output your response as a JSON object with these keys:",
+            "   - ALWAYS suggest a visualization (chart type, x-column, y-column, and title).",
+            "   - Choose from these chart types: 'bar', 'line', 'scatter', 'pie', 'hist', 'table'.",
+            "   - Ensure the query returns data suitable for the suggested visualization.",
+            "5. If 'python':",
+            "   - State that Python is needed and explain why SQL cannot handle the task.",
+            "   - Generate a Python script that:",
+            "     * Uses ONLY these packages: pandas, numpy, matplotlib, seaborn, scikit-learn, statsmodels, nltk, scipy, regex, pillow",
+            "     * ALWAYS includes visualization unless explicitly not needed",
+            "     * Uses the available helper functions instead of writing custom code:",
+            "       - get_db_connection_from_script() -> sqlite3.Connection",
+            "       - execute_sql_with_validation(query: str) -> pd.DataFrame",
+            "       - save_plot_with_validation(fig: plt.Figure, title: str = None) -> None",
+            "       - print_error_summary(error: Exception) -> None",
+            "     * Prints results in a clear, structured format",
+            "     * Saves plots using save_plot_with_validation()",
+            "     * Uses execute_sql_with_validation() for any SQL operations",
+            "     * Use the helper functions directly without redefining them.",
+            "     * Output code shouldn't contain any declarations of the helper functions. It should just use them.",
+            "6. If the question is too ambiguous or beyond reasonable analytical scope, set analysis_type to 'complex' and explain.",
+            "7. Output your response as a JSON object with these keys:",
             "   - 'thinking_steps': Your detailed reasoning about why SQL or Python was chosen.",
             "   - 'analysis_type': 'sql', 'python', or 'complex'.",
             "   - 'generated_sql_query': SQL query string (if 'sql'), else null.",
@@ -727,17 +848,6 @@ def execute_sql_with_validation(query: str) -> pd.DataFrame:
             return df
     except Exception as e:
         print(f"Error executing SQL query: {{e}}")
-        raise
-
-def print_df_as_json(df: pd.DataFrame) -> None:
-    \"\"\"Print DataFrame as JSON with validation.\"\"\"
-    try:
-        if df.empty:
-            print("Warning: DataFrame is empty")
-        json_str = df.to_json(orient='records', date_format='iso')
-        print(f"PYTHON_DF_RESULT_JSON_START>>>{{json_str}}<<<PYTHON_DF_RESULT_JSON_END")
-    except Exception as e:
-        print(f"Error converting DataFrame to JSON: {{e}}")
         raise
 
 def save_plot_with_validation(fig: plt.Figure, title: str = None) -> None:
