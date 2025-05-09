@@ -259,7 +259,9 @@ def generate_plot(df, chart_type, x_column=None, y_column=None, title=None):
     """Generates a plot and returns a base64 encoded image string."""
     if df.empty:
         return None
+    sns.set_theme(style="whitegrid")
     plt.figure(figsize=(10, 6))
+    palette = sns.color_palette("viridis", 8)
     plt.clf() # Clear any previous plots
 
     # Auto-detect columns if not provided
@@ -277,28 +279,91 @@ def generate_plot(df, chart_type, x_column=None, y_column=None, title=None):
 
     try:
         if chart_type == 'bar':
-            sns.barplot(x=df[x_column], y=df[y_column], data=df)
+            sns.barplot(x=df[x_column], y=df[y_column], data=df, palette=palette, alpha=0.8)
         elif chart_type == 'line':
-            sns.lineplot(x=df[x_column], y=df[y_column], data=df)
+            sns.lineplot(
+                x=df[x_column], 
+                y=df[y_column], 
+                data=df,
+                markers=True,  # Add markers at data points
+                dashes=False,  # Solid lines
+                marker='o',    # Circle markers
+                markersize=8,  # Marker size
+                markeredgecolor='white',  # White edge for contrast
+                markeredgewidth=1.5,      # Edge width
+                linewidth=2.5,            # Line thickness
+                color=palette[0]          # Line color
+            )
+            plt.grid(True, linestyle='--', alpha=0.7)
         elif chart_type == 'scatter':
-            sns.scatterplot(x=df[x_column], y=df[y_column], data=df)
+            size_col = df[y_column] if pd.api.types.is_numeric_dtype(df[y_column]) else None
+            
+            sns.scatterplot(
+                x=df[x_column], 
+                y=df[y_column], 
+                data=df,
+                hue=df.columns[2] if len(df.columns) > 2 else None,  # Use third column for color if available
+                size=size_col,  # Dynamic sizing based on y-value
+                sizes=(50, 200),  # Min and max point size
+                alpha=0.7,  # Transparency
+                palette=palette,
+                edgecolor='white',  # White edges for contrast
+                linewidth=0.5
+            )
+            if pd.api.types.is_numeric_dtype(df[x_column]) and pd.api.types.is_numeric_dtype(df[y_column]):
+                sns.regplot(x=df[x_column], y=df[y_column], scatter=False, line_kws={"color": "red", "alpha": 0.7, "lw": 2, "ls": "--"})
+                
+        elif chart_type == 'box':
+            sns.boxplot(
+                x=df[x_column], 
+                y=df[y_column], 
+                data=df,
+                palette=palette,
+                width=0.6,  # Box width
+                fliersize=5,  # Outlier point size
+                linewidth=1.5  # Line width for boxes
+            )
+            # Add strip plot on top of boxplot for actual data distribution
+            sns.stripplot(
+                x=df[x_column], 
+                y=df[y_column], 
+                data=df,
+                size=4, 
+                color='black', 
+                alpha=0.5
+            )
         elif chart_type == 'pie' and len(df) <= 10:
             # Ensure y_column is numeric for pie chart values
             if pd.api.types.is_numeric_dtype(df[y_column]):
                  plt.pie(df[y_column], labels=df[x_column], autopct='%1.1f%%', startangle=90)
             else: # Fallback or error if y_column is not numeric
-                sns.barplot(x=df[x_column], y=df[y_column], data=df) # Fallback to bar
+                sns.barplot(x=df[x_column], y=df[y_column], data=df, palette=palette) # Fallback to bar
                 chart_type = 'bar (fallback from pie due to non-numeric y-axis)'
         elif chart_type == 'hist':
-            # Histograms typically use one column
-            sns.histplot(df[y_column if y_column in df.columns else x_column])
+            sns.histplot(
+                df[y_column if y_column in df.columns else x_column],
+                kde=True,
+                color=palette[0],
+                alpha=0.7,
+                edgecolor='white',
+                linewidth=1
+            )
+            # Add mean line
+            mean_val = df[y_column if y_column in df.columns else x_column].mean()
+            plt.axvline(mean_val, color='red', linestyle='--', linewidth=1.5, 
+                        label=f'Mean: {mean_val:.2f}')
+            plt.legend()
         else: # Default to bar chart
-            sns.barplot(x=df[x_column], y=df[y_column], data=df)
+            ax = sns.barplot(x=df[x_column], y=df[y_column], data=df, palette=palette)
             chart_type = f'bar (defaulted from {chart_type})'
 
         plt.title(title if title else f"{chart_type.capitalize()} of {y_column} by {x_column}")
         plt.xticks(rotation=45, ha='right')
+        plt.xlabel(x_column, fontsize=12, labelpad=10)
+        plt.ylabel(y_column, fontsize=12, labelpad=10)
+        plt.xticks(rotation=45 if len(df) > 5 else 0, ha='right' if len(df) > 5 else 'center')
         plt.tight_layout()
+        plt.figtext(0.9, 0.05, 'Data Insights', fontstyle='italic', alpha=0.5)
         
         buffer = io.BytesIO()
         plt.savefig(buffer, format='png')
@@ -563,7 +628,7 @@ async def analyze_query_endpoint(request: QueryRequest):
             "4. If 'sql':",
             "   - Generate a valid SQLite query.",
             "   - ALWAYS suggest a visualization (chart type, x-column, y-column, and title).",
-            "   - Choose from these chart types: 'bar', 'line', 'scatter', 'pie', 'hist', 'table'.",
+            "   - Choose from these chart types: 'bar', 'line', 'scatter', 'pie', 'hist', 'table', 'box'.",
             "   - Ensure the query returns data suitable for the suggested visualization.",
             "5. If 'python':",
             "   - State that Python is needed and explain why SQL cannot handle the task.",
@@ -577,9 +642,9 @@ async def analyze_query_endpoint(request: QueryRequest):
             "       - print_error_summary(error: Exception) -> None",
             "     * Prints results in a clear, structured format",
             "     * Saves plots using save_plot_with_validation()",
+            "     * If there are multiple plots, then make all of them as sub plots and then save a single plot using save_plot_validation() function",
             "     * Uses execute_sql_with_validation() for any SQL operations",
-            "     * Use the helper functions directly without redefining them.",
-            "     * Output code shouldn't contain any declarations of the helper functions. It should just use them.",
+            "     * OUTPUT CODE MUST NOT GIVE THE DECLARATIONS OF THE HELPER FUNCTIONS MENTIONED ABOVE. JUST THINK AS IT IS ALREADY PRESENT IN EXECUTION ENVIRONMENT.",
             "6. If the question is too ambiguous or beyond reasonable analytical scope, set analysis_type to 'complex' and explain.",
             "7. Output your response as a JSON object with these keys:",
             "   - 'thinking_steps': Your detailed reasoning about why SQL or Python was chosen.",
@@ -691,7 +756,7 @@ async def analyze_query_endpoint(request: QueryRequest):
                 llm_response_data[key] = None
 
         # Validate and clean up chart-related fields
-        valid_chart_types = ["bar", "line", "scatter", "pie", "hist", "table"]
+        valid_chart_types = ["bar", "line", "scatter", "pie", "hist", "table", "box"]
         chart_type = llm_response_data.get("chart_type", "table")
         if chart_type not in valid_chart_types:
             print(f"Warning: Invalid chart_type: {chart_type}")
@@ -1049,13 +1114,13 @@ async def fix_python_code_endpoint(request: FixCodeRequest):
         raise HTTPException(status_code=500, detail=f"Error fixing code: {str(e)}")
 
 # --- To run the app (from terminal) ---
-# uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# uvicorn main:app --reload --host 0.0.0.0 --port 8001
 if __name__ == "__main__":
     # This part is for direct execution of main.py (e.g. python main.py)
     # It's not strictly necessary if you always run with uvicorn from the command line.
     # However, it's good practice for discoverability.
     print("Starting Uvicorn server for Analytics Bot API...")
-    print(f"API will be available at http://127.0.0.1:8000")
-    print(f"Access OpenAPI docs at http://127.0.0.1:8000/docs")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    print(f"API will be available at http://127.0.0.1:8001")
+    print(f"Access OpenAPI docs at http://127.0.0.1:8001/docs")
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
 

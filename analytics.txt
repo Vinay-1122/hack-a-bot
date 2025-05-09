@@ -1,0 +1,51 @@
+Advanced Retail Analytics Questions for Chatbot Testing
+Time Series Analytics
+
+Complex Seasonality Detection: Identify the seasonality patterns in weekly sales across different store types, controlling for holidays, and quantify how these patterns have evolved over time. Calculate the Seasonal-Trend decomposition using LOESS (STL) for departments that show the highest variability.
+Multi-factor Sales Forecasting: Build a predictive model that forecasts weekly sales for store type A using a combination of temperature, fuel price, markdowns, CPI, unemployment rate, and seasonality factors. Which variables have the most significant impact on forecast accuracy based on feature importance?
+Promotion Effectiveness Decay: Analyze how the effectiveness of each markdown type (1-5) decays over time after implementation. Calculate the elasticity coefficient for each markdown type and determine which departments show the strongest promotional response.
+Holiday Sales Anomaly Detection: Using the sales data, identify stores that demonstrate statistically significant anomalies in their holiday vs. non-holiday sales patterns. Develop an anomaly score that accounts for store size and type.
+
+Advanced Cross-Dimensional Analysis
+
+Store Efficiency Frontier: Plot an efficiency frontier using DEA (Data Envelopment Analysis) for all stores based on sales per square foot, controlling for unemployment rate and CPI in their respective regions. Which stores are operating at optimal efficiency?
+Department Cannibalization: Quantify the cannibalization effect between departments when multiple markdown types are applied simultaneously. Which department pairs show the strongest negative correlation in sales when promotions overlap?
+Economic Resilience Scoring: Create a resilience score for each store type that measures how well sales withstand increases in unemployment and decreases in CPI. Which store characteristics correlate most strongly with economic resilience?
+Temperature Elasticity by Department: Calculate the temperature elasticity of demand for each department-store combination and cluster them into temperature sensitivity groups. How do these sensitivity clusters correlate with store size and type?
+
+Complex Aggregation and Cohort Analysis
+
+Rolling Quarter Performance Attribution: Develop a performance attribution model that decomposes sales growth into components attributable to each markdown type, macroeconomic factors, and seasonality using rolling quarterly data. Which factors explain the most variance in performance?
+Hierarchical Department Clustering: Using sales patterns, markdown sensitivity, and holiday performance, create a hierarchical clustering of departments. Then analyze how these clusters differ in their response to macroeconomic indicators.
+Store Cohort Trajectory Analysis: Group stores into cohorts based on their first year's performance and analyze the divergence in growth trajectories over subsequent periods. What characteristics predict which cohorts will outperform in the long term?
+Cross-Elasticity Network: Calculate the complete cross-elasticity network between departments, visualizing how sales in each department affect others. Identify the most influential departments that drive store-wide performance.
+
+Advanced Statistical and Causal Analysis
+
+Synthetic Control Analysis: For stores that underwent a type change (e.g., from B to A), create a synthetic control using similar stores that didn't change type, and estimate the causal impact of the type change on sales performance.
+Bayesian Structural Time Series: Implement a Bayesian structural time series model to estimate the effect of fuel price changes on weekly sales, accounting for seasonality and controlling for other economic factors. Quantify the posterior probability that fuel prices affect different store types differently.
+Counterfactual Holiday Analysis: Using causal inference techniques, estimate what sales would have been during holiday periods if they had been non-holidays, controlling for seasonality, markdowns, and other confounding factors.
+Heterogeneous Treatment Effects: Estimate the heterogeneous treatment effects of markdown type 3 across different store types and departments using causal forests or other machine learning methods for heterogeneous treatment effects. Which segments show the strongest response?
+
+Complex SQL Challenges
+
+Rolling Window Performance Metrics: Write a SQL query that calculates 13-week, 26-week, and 52-week rolling averages, standard deviations, and coefficient of variation for weekly sales by department, with comparison to the same period in the previous year.
+Hierarchical Time Period Analysis: Create a SQL query that aggregates sales data at multiple time hierarchies (day, week, month, quarter, year) simultaneously, with percent contribution to the parent level and year-over-year growth at each level.
+Markdown Interaction Query: Develop a SQL query that identifies all instances where multiple markdown types were active simultaneously, calculating their individual contributions and interaction effects on sales, grouped by department and store type.
+Weather Impact Quantification: Write a complex SQL query that bins temperature data into deciles and calculates the average sales performance for each temperature decile, controlling for seasonality, holidays, and store characteristics. Include statistical significance measures in your query.
+
+Advanced Optimization Problems
+
+Optimal Markdown Allocation: If there's a fixed promotional budget for markdowns, how should it be allocated across markdown types, departments, and weeks to maximize overall sales? Formulate this as a constrained optimization problem.
+Store Portfolio Optimization: If the company could keep only 85% of its stores, which ones should it keep to maximize total sales while minimizing cannibalization between remaining stores and maintaining geographic coverage?
+Department Space Allocation: Using the relationship between department sales and store size, develop an optimal space allocation model for each department within stores of different sizes and types.
+Dynamic Pricing Optimization: Develop a model that suggests optimal weekly price adjustments (using markdown data as a proxy) based on temperature forecasts, upcoming holidays, and current economic indicators to maximize revenue.
+
+Complex Business Questions
+
+Customer Segment Migration: Though we don't have direct customer data, use department sales patterns to infer customer segments and analyze how these segments shift their spending across departments in response to economic conditions.
+Omnichannel Impact Estimation: Without direct e-commerce data, how might you estimate the impact of omnichannel shopping behavior by analyzing unusual patterns in store sales that could indicate buy-online-pickup-in-store or showrooming behaviors?
+Competitive Pressure Index: Using fuel prices as a proxy for local commercial activity, develop a method to estimate competitive pressure for each store and quantify its impact on sales performance.
+Sustainability Impact Modeling: If the company were to convert 30% of stores to more energy-efficient operations (reflected in store type), model the financial impact using the relationship between store characteristics and performance while controlling for external factors.
+Supply Chain Resilience Simulation: Without direct supply chain data, how would you use the sales and markdown data to infer supply chain disruptions and simulate the impact of improving supply chain resilience on sales performance?
+Strategic Markdown Optimization: Design an experiment to determine the optimal timing, duration, and depth of markdowns across different store types and departments to maximize long-term profitability while minimizing inventory carrying costs.

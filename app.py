@@ -6,7 +6,7 @@ import base64 # For displaying plot
 import re # For parsing python output
 
 # --- Configuration ---
-API_URL = "http://127.0.0.1:8000" # Your FastAPI backend URL
+API_URL = "http://127.0.0.1:8001" # Your FastAPI backend URL
 
 # --- Initialize session state ---
 def init_session_state():
@@ -37,7 +37,7 @@ def init_session_state():
 def handle_fix_button_click():
     """Callback function for the Fix with AI button"""
     try:
-        with st.spinner("AI is analyzing and fixing the code..."):
+        with st.spinner("Hackbot is analyzing and fixing the code..."):
             fix_payload = {
                 "code": st.session_state.python_code_editable,
                 "error": st.session_state.current_error_message,
@@ -60,24 +60,24 @@ def handle_fix_button_click():
                     st.session_state.new_code_available = True
                     # Increment editor key to force update
                     st.session_state.editor_key += 1
-                    st.success("Code has been fixed by AI. You can review and run it again.")
+                    st.success("Code has been fixed by Hackbot. You can review and run it again.")
                     # Reset the fix button state
                     st.session_state.fix_button_clicked = False
                     st.session_state.current_error_message = None
                     # Force a rerun to update the editor
                     st.rerun()
                 else:
-                    st.error("AI couldn't generate a fix for the code.")
+                    st.error("Hackbot couldn't generate a fix for the code.")
                     st.session_state.fix_button_clicked = False
             else:
                 st.error(f"Error from server: {fix_response.text}")
                 st.session_state.fix_button_clicked = False
                 
     except requests.exceptions.RequestException as e:
-        st.error(f"Error getting AI fix: {e.response.text if e.response else str(e)}")
+        st.error(f"Error getting Hackbot fix: {e.response.text if e.response else str(e)}")
         st.session_state.fix_button_clicked = False
     except Exception as e:
-        st.error(f"Error during AI code fixing: {str(e)}")
+        st.error(f"Error during Hackbot code fixing: {str(e)}")
         st.session_state.fix_button_clicked = False
 
 init_session_state()
@@ -118,7 +118,7 @@ def check_db_status():
         st.session_state.db_initialized = False # Assume not initialized on error
 
 # --- UI Layout ---
-st.set_page_config(layout="wide", page_title="LLM Analytics Bot")
+st.set_page_config(layout="wide", page_title="HackBot Analytics")
 
 # Check DB status on first load or if explicitly asked
 if "db_initialized" not in st.session_state:
@@ -283,7 +283,7 @@ with st.sidebar:
 
 
 # --- Main Page ---
-st.title("🤖 Enhanced LLM Analytics Bot")
+st.title("🤖 Welcome to HackBot Analytics")
 st.markdown("Ask questions about your data in natural language. Load data and configure settings in the sidebar.")
 
 if not st.session_state.db_initialized:
