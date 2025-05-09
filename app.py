@@ -2,11 +2,12 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
-import base64 # For displaying plot
-import re # For parsing python output
-
+import base64
+import re
+from dotenv import load_dotenv
+load_dotenv()
 # --- Configuration ---
-API_URL = "http://127.0.0.1:8002" # Your FastAPI backend URL
+API_URL = process.env.BACKEND_URL
 
 # --- Initialize session state ---
 def init_session_state():
