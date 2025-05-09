@@ -7,7 +7,7 @@ import re
 from dotenv import load_dotenv
 load_dotenv()
 # --- Configuration ---
-API_URL = process.env.BACKEND_URL
+API_URL = os.getenv("BACKEND_URL")
 
 # --- Initialize session state ---
 def init_session_state():
