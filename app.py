@@ -4,6 +4,7 @@ import json
 import pandas as pd
 import base64
 import re
+import os
 from dotenv import load_dotenv
 load_dotenv()
 # --- Configuration ---
