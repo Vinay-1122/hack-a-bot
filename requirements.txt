@@ -24,3 +24,8 @@ kagglehub>=0.2.0
 streamlit>=1.28.1  # For the frontend
 requests>=2.31.0  # For API calls
 typing-extensions>=4.8.0  # For type hints 
+
+scikit-learn>=1.3.0  # For machine learning tasks
+statsmodels>=0.14.0  # For statistical models
+pillow>=10.0.0  # For image processing
+scipy>=1.11.3  # For scientific computing
