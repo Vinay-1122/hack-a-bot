@@ -69,17 +69,21 @@ def execute_python_script(code, max_retries=4):
             # Check for error summary in output
             output_text = python_run_results.get("output", "")
             has_error_summary = "Error Summary:" in output_text
+            error_message = python_run_results.get("error")
+
+            # KeyboardInterrupt: re-run without incrementing retry
+            if error_message and "KeyboardInterrupt" in error_message:
+                st.warning("KeyboardInterrupt detected. Re-running script...")
+                time.sleep(1)
+                continue
 
             if python_run_results.get("status") == "success" and not has_error_summary:
                 return python_run_results, None
             else:
-                error_message = python_run_results.get("error")
                 if not error_message and has_error_summary:
-                    error_message = output_text  # Use the error summary as the error message
-                
+                    error_message = output_text
                 if retry_count < max_retries - 1:
                     st.warning(f"Attempt {retry_count + 1} failed. Retrying with AI fix...")
-                    # Get AI fix
                     fix_payload = {
                         "code": code,
                         "error_message": error_message,
@@ -91,14 +95,14 @@ def execute_python_script(code, max_retries=4):
                         fixed_code = fix_response.json().get("fixed_code")
                         if fixed_code:
                             code = fixed_code
-                            time.sleep(1)  # Add delay to prevent keyboard interrupt
+                            time.sleep(1)
                             retry_count += 1
                             continue
                 return python_run_results, error_message
         except Exception as e:
             if retry_count < max_retries - 1:
                 st.warning(f"Attempt {retry_count + 1} failed. Retrying...")
-                time.sleep(1)  # Add delay to prevent keyboard interrupt
+                time.sleep(1)
                 retry_count += 1
                 continue
             return None, str(e)
@@ -113,7 +117,13 @@ def execute_python_script_debug(code):
         }
         py_response = requests.post(f"{API_URL}/execute-python/", json=py_payload, timeout=60)
         py_response.raise_for_status()
-        return py_response.json(), None
+        python_run_results = py_response.json()
+        error_message = python_run_results.get("error")
+        if error_message and "KeyboardInterrupt" in error_message:
+            st.warning("KeyboardInterrupt detected. Re-running script...")
+            time.sleep(1)
+            return execute_python_script_debug(code)
+        return python_run_results, None
     except Exception as e:
         return None, str(e)
 
@@ -189,58 +199,73 @@ def render_python_editor(generated_python_script):
 
 def display_python_results(python_run_results):
     """Display the results of Python script execution."""
-    st.subheader("🐍 Python Script Execution Output")
-    if python_run_results.get("status") == "success":
-        st.success("Python script executed successfully.")
-    else:
-        st.error("Python script execution encountered an error.")
+    st.markdown(
+        """
+        <style>
+        .full-width-output .stDataFrame, .full-width-output .stMarkdown, .full-width-output .stCodeBlock, .full-width-output .stImage {
+            width: 100% !important;
+            min-width: 100% !important;
+            max-width: 100% !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container():
+        st.subheader("🐍 Python Script Execution Output")
+        if python_run_results.get("status") == "success":
+            st.success("Python script executed successfully.")
+        else:
+            st.error("Python script execution encountered an error.")
 
-    if python_run_results.get("output"):
-        st.markdown("##### Script Output (stdout):")
-        
-        # Attempt to parse and display DataFrame if present
-        output_text = python_run_results.get("output")
-        df_json_match = re.search(r"PYTHON_DF_RESULT_JSON_START>>>(.*?)<<<PYTHON_DF_RESULT_JSON_END", output_text, re.DOTALL)
-        
-        if df_json_match:
-            df_json_str = df_json_match.group(1)
-            # Remove the matched part from the main output to avoid duplication
-            display_output_text = output_text.replace(df_json_match.group(0), "").strip()
-            if display_output_text:  # Show remaining stdout if any
-                st.code(display_output_text, language="text")
-            
-            st.markdown("##### DataFrame Result from Python:")
+        output_text = python_run_results.get("output", "")
+        # Remove 'None' output
+        if output_text is not None and output_text.strip().lower() == "none":
+            output_text = ""
+
+        # Find all DataFrame JSON blocks
+        df_json_matches = list(re.finditer(r"PYTHON_DF_RESULT_JSON_START>>>(.*?)<<<PYTHON_DF_RESULT_JSON_END", output_text, re.DOTALL))
+        shown_any_table = False
+        for match in df_json_matches:
+            df_json_str = match.group(1)
             try:
                 py_df = pd.read_json(df_json_str, orient='records')
-                st.dataframe(py_df, use_container_width=True)
+                st.dataframe(py_df, use_container_width=True, height=400)
+                shown_any_table = True
             except Exception as parse_df_e:
                 st.error(f"Could not parse DataFrame from Python script output: {parse_df_e}")
                 st.text("Raw DataFrame JSON (if any):\n" + df_json_str)
-        else:  # No special DataFrame output found
+        # Remove all DataFrame JSON blocks from output_text
+        for match in df_json_matches:
+            output_text = output_text.replace(match.group(0), "")
+
+        # Show printed output behind a toggle if any
+        if output_text.strip():
+            with st.expander("Show Raw Output (stdout)", expanded=False):
+                st.code(output_text.strip(), language="text")
+
+        # Show error output if any
+        if python_run_results.get("error"):
+            st.markdown("##### Script Error Output (stderr):")
+            st.code(python_run_results.get("error"), language="text")
+            st.session_state.current_error_message = python_run_results.get("error")
+        else:
+            st.session_state.current_error_message = None
+
+        # Show error summary if present in output
+        if "Error Summary:" in output_text:
+            st.markdown("##### Error from Script Output:")
             st.code(output_text, language="text")
+            if not st.session_state.current_error_message:
+                st.session_state.current_error_message = output_text
 
-    if python_run_results.get("error"):
-        st.markdown("##### Script Error Output (stderr):")
-        st.code(python_run_results.get("error"), language="text")
-        st.session_state.current_error_message = python_run_results.get("error")
-    else:
-        st.session_state.current_error_message = None
-
-    # Check for errors in the script output (from print_error_summary)
-    output_text = python_run_results.get("output", "")
-    if "Error Summary:" in output_text:
-        st.markdown("##### Error from Script Output:")
-        st.code(output_text, language="text")
-        if not st.session_state.current_error_message:  # Only set if we don't have a direct error
-            st.session_state.current_error_message = output_text
-
-    python_plot_b64 = python_run_results.get("plot_base64")
-    if python_plot_b64:
-        st.markdown("##### Plot from Python Script:")
-        try:
-            if ',' in python_plot_b64: header, encoded = python_plot_b64.split(",", 1)
-            else: encoded = python_plot_b64
-            py_plot_bytes = base64.b64decode(encoded)
-            st.image(py_plot_bytes, caption="Plot generated by Python script", use_container_width=True)
-        except Exception as py_img_e:
-            st.error(f"Error displaying Python plot: {py_img_e}") 
+        python_plot_b64 = python_run_results.get("plot_base64")
+        if python_plot_b64:
+            st.markdown("##### Plot from Python Script:")
+            try:
+                if ',' in python_plot_b64: header, encoded = python_plot_b64.split(",", 1)
+                else: encoded = python_plot_b64
+                py_plot_bytes = base64.b64decode(encoded)
+                st.image(py_plot_bytes, caption="Plot generated by Python script", use_container_width=True)
+            except Exception as py_img_e:
+                st.error(f"Error displaying Python plot: {py_img_e}") 
