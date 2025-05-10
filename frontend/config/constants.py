@@ -27,5 +27,6 @@ SESSION_STATE_DEFAULTS = {
     "fix_button_clicked": False,  # Track if fix button was clicked
     "editor_key": 0,  # Track editor updates
     "new_code": "",  # Store new code temporarily
-    "new_code_available": False  # Flag for new code
+    "new_code_available": False,  # Flag for new code
+    "advanced_mode": False  # Toggle for basic/advanced mode
 } 
