@@ -2,4 +2,4 @@
 Routes package initialization
 """ 
 
-from . import query, semantic_schema, code_fix, data 
+from . import query, semantic_schema, code_fix, data

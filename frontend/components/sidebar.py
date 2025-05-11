@@ -98,7 +98,10 @@ def render_sidebar():
         if not st.session_state.advanced_mode:
             if st.button("📥 Load Default Retail Analytics Dataset", use_container_width=True):
                 with st.spinner("Loading default dataset..."):
-                    load_default_data()
+                    response = load_default_data()
+                    if response and 'schema' in response:
+                        st.session_state.current_semantic_schema = json.dumps(response['schema'], indent=2)
+                        st.toast("Default dataset and schema loaded successfully!", icon="✅")
                     delay_and_rerun()
         
         # Check DB status button
