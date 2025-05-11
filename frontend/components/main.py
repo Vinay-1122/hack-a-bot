@@ -135,7 +135,6 @@ def render_main_page():
 
         elif analysis_type == "python":
             st.subheader("🐍 Python Code for Advanced Analysis")
-            st.info(api_response_data.get("reason_if_not_sql_or_python", "Python script generated for analysis."))
             
             generated_python_script = api_response_data.get("generated_python_script")
             if generated_python_script:
