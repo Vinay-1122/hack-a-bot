@@ -51,6 +51,16 @@ def init_session_state():
     if "use_rag_mode" not in st.session_state:
         st.session_state.use_rag_mode = False
 
+    # Token tracking variables
+    if "total_input_tokens" not in st.session_state:
+        st.session_state.total_input_tokens = 0
+    
+    if "total_output_tokens" not in st.session_state:
+        st.session_state.total_output_tokens = 0
+    
+    if "total_cost" not in st.session_state:
+        st.session_state.total_cost = 0.0
+
 def update_session_state(key, value):
     """Update a specific session state value."""
     st.session_state[key] = value

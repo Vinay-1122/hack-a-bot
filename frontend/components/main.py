@@ -197,7 +197,7 @@ def render_main_page():
     if st.session_state.chat_history:
         st.markdown("### 📜 Conversation History")
         for i, entry in enumerate(reversed(st.session_state.chat_history)):
-            with st.expander(f"Q: {entry['question']} ({datetime.fromisoformat(entry['timestamp']).strftime('%Y-%m-%d %H:%M:%S')})"):
+            with st.expander(f"Q: {entry['question']} ({datetime.fromisoformat(entry['timestamp']).strftime('%Y-%m-%d %H:%M:%S')})", expanded=True):
                 # Display question and mode indicators
                 st.markdown(f"#### 🔍 Question: {entry['question']}")
                 advanced_indicator = " (Advanced Mode)" if entry.get("advanced_mode", False) else ""
