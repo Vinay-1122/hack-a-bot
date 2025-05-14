@@ -6,7 +6,7 @@ import re
 import google.generativeai as genai
 from core.llm import configure_gemini, generate_query_analysis_prompt
 from core.database import get_db_schema, execute_sql_query
-from core.vector_store import get_relevant_schema_from_rag
+from core.vector_store import get_relevant_schema_from_rag, store_conversation, get_relevant_conversations, clear_conversation_history
 from utils.plotting import generate_plot
 
 router = APIRouter()
@@ -17,6 +17,7 @@ class QueryRequest(BaseModel):
     model_name: str = "gemini-1.5-flash"
     user_api_key: Optional[str] = None
     use_rag_for_schema: bool = False  # For RAG toggle
+    use_rag_mode: bool = False  # New field for RAG mode
 
 @router.post("/query-analyzer/")
 async def analyze_query_endpoint(request: QueryRequest):
@@ -42,7 +43,8 @@ async def analyze_query_endpoint(request: QueryRequest):
                 "simple_summary_inference": "Cannot process query as the database is not initialized or empty.",
                 "chart_type": "table",
                 "input_tokens_used": 0,
-                "output_tokens_used": 0
+                "output_tokens_used": 0,
+                "follow_up_questions": []
             }
 
         try:
@@ -57,9 +59,27 @@ async def analyze_query_endpoint(request: QueryRequest):
         else:
             schema_context_for_llm = f"DATABASE SCHEMA:\n{json.dumps(db_schema, indent=2)}"
 
+        # Get relevant conversation history if RAG mode is enabled
+        conversation_context = ""
+        if request.use_rag_mode:
+            relevant_conversations = get_relevant_conversations(request.question)
+            if relevant_conversations:
+                conversation_context = "\n\nRelevant previous conversations:\n"
+                for conv in relevant_conversations:
+                    conversation_context += f"Q: {conv['question']}\n"
+                    conversation_context += f"A: {conv['response']}\n"
+                    if conv.get('results'):
+                        conversation_context += f"Results: {json.dumps(conv['results'][:5])}\n"
+                    conversation_context += "---\n"
+
         # Generate and execute query
-        llm_prompt = generate_query_analysis_prompt(request.question, schema_context_for_llm, semantic_schema)
-        input_tokens_used = len(llm_prompt) // 4  # Rough estimate
+        llm_prompt = generate_query_analysis_prompt(
+            request.question, 
+            schema_context_for_llm, 
+            semantic_schema,
+            conversation_context if request.use_rag_mode else None
+        )
+        input_tokens_used = len(llm_prompt) // 4
 
         generation_config = genai.types.GenerationConfig(candidate_count=1)
         model_response = model.generate_content(llm_prompt, generation_config=generation_config)
@@ -161,6 +181,7 @@ async def analyze_query_endpoint(request: QueryRequest):
         results_data = None
         plot_base64 = None
         analysis_summary = llm_response_data.get("thinking_steps", "No thinking steps provided.")
+        follow_up_questions = []
 
         if analysis_type == "sql" and sql_query:
             try:
@@ -184,6 +205,54 @@ async def analyze_query_endpoint(request: QueryRequest):
                             analysis_summary += " Chart generated."
                         else:
                             analysis_summary += " Could not generate chart from SQL results."
+
+                # Generate follow-up questions using LLM
+                follow_up_prompt = f"""
+                Based on the following:
+                1. Original question: {request.question}
+                2. Database schema: {schema_context_for_llm}
+                3. Query results: {json.dumps(results_data[:5])}  # First 5 rows for context
+                
+                Generate 3 relevant follow-up questions that would help explore the data further.
+                Questions should be:
+                - Specific and actionable
+                - Build upon insights from the current query
+                - Consider the data relationships and patterns
+                - Help uncover deeper insights
+                - Be natural and conversational
+                - Focus on the most interesting aspects of the data
+                - Avoid redundant or obvious questions
+                
+                Format as a JSON array of strings.
+                Example format:
+                [
+                    "What is the trend of [metric] over time?",
+                    "How does [category] compare to other categories?",
+                    "What factors influence [outcome] the most?"
+                ]
+                
+                Respond ONLY with the JSON array, no additional text.
+                """
+                
+                follow_up_response = model.generate_content(follow_up_prompt)
+                try:
+                    # Clean up the response text
+                    response_text = follow_up_response.text.strip()
+                    # Remove any markdown code block markers
+                    response_text = response_text.replace("```json", "").replace("```", "").strip()
+                    # Remove any leading/trailing quotes
+                    response_text = response_text.strip('"\'')
+                    
+                    follow_up_questions = json.loads(response_text)
+                    if not isinstance(follow_up_questions, list):
+                        follow_up_questions = []
+                    # Ensure we have at most 3 questions
+                    follow_up_questions = follow_up_questions[:3]
+                except Exception as e:
+                    print(f"Error parsing follow-up questions: {e}")
+                    print(f"Raw response: {follow_up_response.text}")
+                    follow_up_questions = []
+
             except Exception as e:
                 analysis_summary += f"\nError executing SQL: {str(e)}"
                 llm_response_data["analysis_type"] = "error_sql_execution"
@@ -194,6 +263,18 @@ async def analyze_query_endpoint(request: QueryRequest):
         
         elif analysis_type == "complex":
             analysis_summary = llm_response_data.get("reason_if_not_sql_or_python", "The question is too complex for standard SQL/Python analysis with current setup.")
+
+        # Store conversation in vector store if RAG mode is enabled
+        if request.use_rag_mode:
+            conversation_data = {
+                "question": request.question,
+                "response": llm_output_json,
+                "results": results_data if 'results_data' in locals() else None,
+                "analysis_type": analysis_type,
+                "sql_query": sql_query if 'sql_query' in locals() else None,
+                "python_script": python_script if 'python_script' in locals() else None
+            }
+            store_conversation(conversation_data)
 
         return {
             "thinking_steps": llm_response_data.get("thinking_steps"),
@@ -212,11 +293,21 @@ async def analyze_query_endpoint(request: QueryRequest):
             "input_tokens_used": input_tokens_used,
             "output_tokens_used": output_tokens_used,
             "executed_python_output": None,
-            "python_plot_base64": None
+            "python_plot_base64": None,
+            "follow_up_questions": follow_up_questions
         }
 
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error in /query-analyzer: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+
+@router.post("/clear-conversation-history/")
+async def clear_conversation_history_endpoint():
+    """Clear the conversation history from the vector store."""
+    try:
+        clear_conversation_history()
+        return {"message": "Conversation history cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing conversation history: {str(e)}") 

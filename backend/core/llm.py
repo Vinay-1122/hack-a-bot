@@ -32,7 +32,7 @@ def generate_semantic_schema_prompt(db_schema: dict) -> str:
     Generate the semantic schema. Respond ONLY with the JSON object.
     """
 
-def generate_query_analysis_prompt(question: str, schema_context: str, semantic_schema: dict) -> str:
+def generate_query_analysis_prompt(question: str, schema_context: str, semantic_schema: dict, conversation_context: Optional[str] = None) -> str:
     """Generates the prompt for query analysis."""
     prompt_parts = [
         "You are an expert data analyst. Your task is to convert natural language questions into executable SQL queries for SQLite or Python scripts for more complex analysis.",
@@ -95,10 +95,24 @@ def generate_query_analysis_prompt(question: str, schema_context: str, semantic_
         schema_context,
         "\nSEMANTIC SCHEMA (Business Context):\n",
         json.dumps(semantic_schema, indent=2),
+    ]
+
+    # Add conversation context if available
+    if conversation_context:
+        prompt_parts.extend([
+            "\nRELEVANT PREVIOUS CONVERSATIONS:\n",
+            conversation_context,
+            "\nUse the above conversation history to provide more context-aware and consistent responses.",
+            "Consider previous questions and answers when generating your response.",
+            "If the current question is related to a previous one, build upon that context."
+        ])
+
+    prompt_parts.extend([
         "\nUSER QUESTION:\n",
         question,
         "\nRespond ONLY with the JSON object. Do not include any other text, markdown, or explanations outside the JSON structure."
-    ]
+    ])
+
     return "\n".join(prompt_parts)
 
 def generate_code_fix_prompt(code: str, error: str) -> str:

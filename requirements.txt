@@ -29,3 +29,6 @@ scikit-learn>=1.3.0  # For machine learning tasks
 statsmodels>=0.14.0  # For statistical models
 pillow>=10.0.0  # For image processing
 scipy>=1.11.3  # For scientific computing
+
+faiss-cpu
+sentence-transformers

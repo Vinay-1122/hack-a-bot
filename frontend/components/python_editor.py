@@ -140,6 +140,7 @@ def render_python_editor(generated_python_script):
             st.session_state.first_load = True
             # Default to debug mode on first load/page refresh
             st.session_state.edit_mode = True
+            st.session_state.auto_run_enabled = False
             
         # Add edit/debug mode toggle
         previous_mode = st.session_state.get("edit_mode", True)
@@ -149,6 +150,7 @@ def render_python_editor(generated_python_script):
             help="Toggle between automatic execution with AI fixes and manual edit/debug mode"
         )
         
+        # If user inputs a question, then the mode should be automatic
         # Detect mode change
         if previous_mode != st.session_state.edit_mode:
             # Mode switched - clear execution flag
@@ -208,12 +210,15 @@ def render_python_editor(generated_python_script):
                                    on_click=handle_fix_button_click):
                             pass
         else:
-            # Automatic execution mode - but only run when explicitly requested
+            # Automatic execution mode
             st.info("Running in automatic mode. The code will be executed and automatically fixed if needed.")
             
-            if st.session_state.code_execution_requested:
+            # Only auto-run if explicitly requested and not in a reload loop
+            if st.session_state.code_execution_requested and not st.session_state.get("auto_run_enabled", False):
                 with st.spinner("Executing Python script with automatic fixes..."):
-                    # Clear flag immediately to prevent re-execution
+                    # Set auto-run flag to prevent reload loops
+                    st.session_state.auto_run_enabled = True
+                    # Clear execution flag
                     st.session_state.code_execution_requested = False
                     
                     python_run_results, error = execute_python_script(generated_python_script)
@@ -223,13 +228,17 @@ def render_python_editor(generated_python_script):
                         # Switch back to debug mode after failure
                         st.session_state.edit_mode = True
                         st.session_state.show_python_editor = True
+                        st.session_state.auto_run_enabled = False
                         st.rerun()
                     else:
                         display_python_results(python_run_results)
+                        # Reset auto-run flag after successful execution
+                        st.session_state.auto_run_enabled = False
             else:
                 # Display a button to execute the code
                 if st.button("▶️ Run Auto-fix Script", key="auto_run_python_button"):
                     st.session_state.code_execution_requested = True
+                    st.session_state.auto_run_enabled = False
                     st.rerun()
                 
         # Reset first load flag

@@ -1,9 +1,12 @@
 import os
 import pickle
 import numpy as np
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from .config import VECTOR_STORE_PATH, EMBEDDING_MODEL
 import json
+from sentence_transformers import SentenceTransformer
+import faiss
+from datetime import datetime
 
 class VectorStore:
     def __init__(self, store_path: str = VECTOR_STORE_PATH, model_name: str = EMBEDDING_MODEL):
@@ -178,6 +181,94 @@ class VectorStore:
         # Return relevant entries
         return [self.metadata[i] for i in indices[0]]
 
+class ConversationStore:
+    def __init__(self, store_path: str = "data/vector_store"):
+        self.store_path = store_path
+        self.index_path = os.path.join(store_path, "conversation_index.faiss")
+        self.data_path = os.path.join(store_path, "conversation_data.pkl")
+        self.model = None
+        self.index = None
+        self.conversations = []
+        self.dimension = 384  # Dimension for all-MiniLM-L6-v2
+        
+        # Create directory if it doesn't exist
+        os.makedirs(store_path, exist_ok=True)
+        
+        # Initialize model and index
+        try:
+            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            if os.path.exists(self.index_path) and os.path.exists(self.data_path):
+                self.load()
+            else:
+                self.initialize()
+        except ImportError:
+            print("WARNING: sentence-transformers not installed. Conversation history features will not work.")
+
+    def initialize(self):
+        """Initialize a new FAISS index for conversations."""
+        if not self.model:
+            raise ImportError("SentenceTransformer not available")
+        self.index = faiss.IndexFlatL2(self.dimension)
+        self.conversations = []
+
+    def load(self):
+        """Load existing conversation index and data."""
+        if not self.model:
+            raise ImportError("SentenceTransformer not available")
+        self.index = faiss.read_index(self.index_path)
+        with open(self.data_path, 'rb') as f:
+            self.conversations = pickle.load(f)
+
+    def save(self):
+        """Save conversation index and data to disk."""
+        if self.index is not None:
+            faiss.write_index(self.index, self.index_path)
+            with open(self.data_path, 'wb') as f:
+                pickle.dump(self.conversations, f)
+
+    def add_conversation(self, conversation_data: Dict[str, Any]):
+        """Add a conversation to the store."""
+        if not self.model:
+            raise ImportError("SentenceTransformer not available")
+        
+        # Add timestamp
+        conversation_data['timestamp'] = datetime.now().isoformat()
+        
+        # Create text representation for embedding
+        text_to_embed = f"Question: {conversation_data['question']}\n"
+        text_to_embed += f"Response: {conversation_data['response']}\n"
+        if conversation_data.get('results'):
+            text_to_embed += f"Results: {json.dumps(conversation_data['results'][:5])}\n"
+        
+        # Generate embedding
+        embedding = self.model.encode([text_to_embed])[0]
+        
+        # Add to index and data
+        self.index.add(np.array([embedding]))
+        self.conversations.append(conversation_data)
+        
+        # Save updated index and data
+        self.save()
+
+    def search_conversations(self, query: str, k: int = 3) -> List[Dict[str, Any]]:
+        """Search for relevant conversations."""
+        if not self.model or not self.index or not self.conversations:
+            return []
+        
+        # Generate query embedding
+        query_embedding = self.model.encode([query])[0]
+        
+        # Search for similar conversations
+        distances, indices = self.index.search(np.array([query_embedding]), k)
+        
+        # Return relevant conversations
+        return [self.conversations[i] for i in indices[0] if i < len(self.conversations)]
+
+    def clear(self):
+        """Clear all stored conversations and the vector index."""
+        self.initialize()
+        self.save()
+
 def get_relevant_schema_from_rag(question: str, db_schema: Union[Dict[str, Any], List[Dict[str, Any]]]) -> str:
     """
     Retrieve relevant schema information using RAG.
@@ -210,3 +301,35 @@ def get_relevant_schema_from_rag(question: str, db_schema: Union[Dict[str, Any],
     except Exception as e:
         print(f"Error in RAG schema retrieval: {e}")
         return f"DATABASE SCHEMA:\n{json.dumps(db_schema, indent=2)}"
+
+def store_conversation(conversation_data: Dict[str, Any]):
+    """
+    Store a conversation in the vector store.
+    """
+    try:
+        conversation_store = ConversationStore()
+        conversation_store.add_conversation(conversation_data)
+    except Exception as e:
+        print(f"Error storing conversation: {e}")
+
+def get_relevant_conversations(question: str, k: int = 1) -> List[Dict[str, Any]]:
+    """
+    Retrieve relevant conversations based on the question.
+    """
+    try:
+        conversation_store = ConversationStore()
+        return conversation_store.search_conversations(question, k)
+    except Exception as e:
+        print(f"Error retrieving conversations: {e}")
+        return []
+
+def clear_conversation_history():
+    """
+    Clear all stored conversations and the vector index.
+    """
+    try:
+        conversation_store = ConversationStore()
+        conversation_store.clear()
+    except Exception as e:
+        print(f"Error clearing conversation history: {e}")
+        raise

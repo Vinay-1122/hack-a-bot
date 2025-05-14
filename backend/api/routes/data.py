@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import os
 import json
 import pandas as pd
@@ -9,6 +9,7 @@ import sqlite3
 import traceback
 import re
 import base64
+import numpy as np
 
 # Optional dependencies
 try:
@@ -37,6 +38,12 @@ class SemanticSchemaRequest(BaseModel):
 class ExecutePythonRequest(BaseModel):
     script: str
     user_api_key: Optional[str] = None
+
+class GenerateInferenceRequest(BaseModel):
+    data: List[Dict[str, Any]]
+    max_rows: Optional[int] = 50
+    user_api_key: Optional[str] = None
+    question: Optional[str] = None
 
 # --- Helper functions ---
 def _clean_column_name(col_name):
@@ -238,11 +245,18 @@ async def generate_initial_semantic_schema_endpoint(request: SemanticSchemaReque
 
 @router.post("/execute-python/")
 async def execute_python_script_endpoint(request: ExecutePythonRequest):
+    """
+    Execute a Python script in a controlled environment.
+    WARNING: Direct execution of arbitrary code is a security risk in production.
+    """
     script_to_execute = request.script
+    # Create a temporary directory for the script to run and save files
     temp_run_dir = os.path.abspath(os.path.join(DATA_DIR, "py_run_temp"))
     os.makedirs(temp_run_dir, exist_ok=True)
     script_file_path = os.path.join(temp_run_dir, "script.py")
     db_file_path_for_script = os.path.abspath(DB_PATH)
+
+    # Basic security check - prevent obvious dangerous operations
     dangerous_patterns = [
         r"import\s+os\s*;?\s*os\.system",
         r"import\s+subprocess\s*;?\s*subprocess\.run",
@@ -257,12 +271,15 @@ async def execute_python_script_endpoint(request: ExecutePythonRequest):
         r"os\.rmdir",
         r"os\.removedirs",
     ]
+    
     for pattern in dangerous_patterns:
         if re.search(pattern, script_to_execute, re.IGNORECASE):
             raise HTTPException(
                 status_code=400,
                 detail="Script contains potentially dangerous operations. Please modify the script to use only safe operations."
             )
+
+    # Add a preamble to the script
     script_preamble = f"""
 
 import os
@@ -316,7 +333,6 @@ def save_plot_with_validation(fig: plt.Figure, title: str = None) -> None:
     try:
         if title:
             fig.suptitle(title, fontsize=16, y=1.02)
-        fig.tight_layout()
         fig.savefig(PLOT_OUTPUT_PATH, dpi=300, bbox_inches='tight')
         plt.close(fig)
     except Exception as e:
@@ -331,6 +347,17 @@ def print_error_summary(error: Exception) -> None:
     print(f"\\nTraceback:")
     print(traceback.format_exc())
 
+def print_data(dataframes) -> None:
+    output = {{}}
+    for i, df in enumerate(dataframes):
+        if isinstance(df['df'], pd.DataFrame):
+            output[df['title']] = df['df'].to_dict(orient='records')
+
+    print("DATAFRAME_OUTPUT_START")
+    print(json.dumps(output))
+    print("DATAFRAME_OUTPUT_END")
+        
+
 # Main execution wrapper
 try:
     # Your script code will be inserted here
@@ -341,6 +368,8 @@ except Exception as e:
 
 """
     full_script_content = script_preamble + "\n" + script_to_execute
+
+    # Ensure the directory exists and is clean
     if os.path.exists(temp_run_dir):
         for file in os.listdir(temp_run_dir):
             file_path = os.path.join(temp_run_dir, file)
@@ -348,57 +377,71 @@ except Exception as e:
                 if os.path.isfile(file_path):
                     os.remove(file_path)
             except Exception as e:
-                pass
+                print(f"Error cleaning up existing file {file_path}: {e}")
     else:
         os.makedirs(temp_run_dir)
+
+    # Write the script file
     with open(script_file_path, "w") as f:
         f.write(full_script_content)
+
     try:
+        # Using subprocess for a degree of isolation (still not a full sandbox)
         import subprocess
         process = subprocess.run(
             ["python", script_file_path],
             capture_output=True,
             text=True,
-            timeout=30,
-            cwd=temp_run_dir,
-            env={**os.environ, "PYTHONPATH": temp_run_dir}
+            timeout=30, # Add a timeout
+            cwd=temp_run_dir, # Run script from its own directory
+            env={**os.environ, "PYTHONPATH": temp_run_dir} # Isolate Python path
         )
         captured_stdout = process.stdout
         error_output = process.stderr
+
         if process.returncode != 0:
             error_output = f"Script execution failed with code {process.returncode}:\n{process.stderr}"
         else:
+            print("Python script executed via subprocess successfully.")
+            # Check if a plot was saved
             plot_file_path = os.path.join(temp_run_dir, "plot.png")
             if os.path.exists(plot_file_path):
                 with open(plot_file_path, "rb") as pf:
                     plot_b64_from_python = base64.b64encode(pf.read()).decode('utf-8')
-            df_json_match = re.search(r"PYTHON_DF_RESULT_JSON_START>>>(.*?)<<<PYTHON_DF_RESULT_JSON_END", captured_stdout, re.DOTALL)
+            
+            # Check for structured DataFrame output
+            df_json_match = re.search(r'DATAFRAME_OUTPUT_START\n(.*?)\nDATAFRAME_OUTPUT_END', captured_stdout, re.DOTALL)
             if df_json_match:
                 df_json_str = df_json_match.group(1)
                 try:
-                    captured_stdout = captured_stdout.replace(df_json_match.group(0), "[DataFrame result below]\n")
+                    # Replace the matched part with a marker or remove it to clean up stdout
+                    df_json = json.loads(df_json_str)
                 except json.JSONDecodeError:
-                    pass
+                    print("Could not parse DataFrame JSON from script output.")
+
     except subprocess.TimeoutExpired:
         error_output = "Python script execution timed out after 30 seconds."
     except Exception as e:
         error_output = f"Error during Python script execution attempt: {str(e)}\n{traceback.format_exc()}"
     finally:
+        # Clean up temporary files
         try:
             if os.path.exists(script_file_path):
                 os.remove(script_file_path)
             plot_file_path = os.path.join(temp_run_dir, "plot.png")
             if os.path.exists(plot_file_path):
                 os.remove(plot_file_path)
+            # Clean up any other temporary files that might have been created
             for file in os.listdir(temp_run_dir):
                 file_path = os.path.join(temp_run_dir, file)
                 try:
                     if os.path.isfile(file_path):
                         os.remove(file_path)
                 except Exception as e:
-                    pass
+                    print(f"Error cleaning up temporary file {file_path}: {e}")
         except Exception as cleanup_error:
-            pass
+            print(f"Error cleaning up temporary files: {cleanup_error}")
+
     if error_output:
         return {
             "status": "error",
@@ -406,12 +449,14 @@ except Exception as e:
             "error": error_output,
             "plot_base64": None
         }
+    
     return {
         "status": "success",
-        "output": captured_stdout.strip(),
+        "output": df_json_str if 'df_json' in locals() else None,
         "error": None,
         "plot_base64": plot_b64_from_python if 'plot_b64_from_python' in locals() else None
     }
+
 
 @router.post("/clear-database/")
 async def clear_database_endpoint():
@@ -426,4 +471,195 @@ async def clear_database_endpoint():
         conn.close()
         return {"message": f"Successfully cleared database. Removed {len(tables)} tables."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error clearing database: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Error clearing database: {str(e)}")
+
+@router.post("/generate-inference/")
+async def generate_inference_endpoint(request: GenerateInferenceRequest):
+    """Generate a summary inference from the provided data using LLM."""
+    try:
+        print(f"[Inference] Starting inference generation for {len(request.data)} records")
+        
+        # Convert data to DataFrame
+        try:
+            df = pd.DataFrame(request.data)
+            print(f"[Inference] Successfully created DataFrame with shape {df.shape}")
+        except Exception as e:
+            print(f"[Inference] Error creating DataFrame: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid data format: {str(e)}")
+        
+        # Limit rows if needed
+        if len(df) > request.max_rows:
+            print(f"[Inference] Limiting data from {len(df)} to {request.max_rows} rows")
+            df = df.head(request.max_rows)
+        
+        # Get basic data info for the prompt
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        # Generate basic statistics for the prompt
+        stats_info = {}
+        for col in numeric_cols:
+            try:
+                stats = df[col].describe()
+                stats_info[col] = {
+                    "mean": float(stats['mean']),
+                    "min": float(stats['min']),
+                    "max": float(stats['max']),
+                    "std": float(stats['std'])
+                }
+            except Exception as e:
+                print(f"[Inference] Error calculating stats for {col}: {str(e)}")
+        
+        # Get value counts for categorical columns
+        cat_info = {}
+        for col in categorical_cols:
+            try:
+                value_counts = df[col].value_counts().head(5).to_dict()
+                cat_info[col] = {
+                    "unique_count": len(df[col].unique()),
+                    "top_values": value_counts
+                }
+            except Exception as e:
+                print(f"[Inference] Error calculating value counts for {col}: {str(e)}")
+        
+        # Prepare data for LLM
+        data_info = {
+            "total_rows": len(df),
+            "total_columns": len(df.columns),
+            "numeric_columns": numeric_cols,
+            "categorical_columns": categorical_cols,
+            "numeric_stats": stats_info,
+            "categorical_stats": cat_info,
+            "sample_data": df.head(5).to_dict(orient='records')
+        }
+        print(request.question)
+        
+        # Configure Gemini
+        try:
+            if genai is None:
+                raise HTTPException(status_code=500, detail="Gemini API module not installed. Install with 'pip install google-generativeai'")
+            
+            resolved_api_key = request.user_api_key or DEFAULT_GEMINI_API_KEY
+            if not resolved_api_key:
+                raise HTTPException(
+                    status_code=401,
+                    detail="No Gemini API key provided. Please provide an API key in the sidebar or set GEMINI_API_KEY environment variable."
+                )
+            
+            from core.llm import configure_gemini
+            model = configure_gemini(resolved_api_key, "gemini-1.5-flash")
+            
+            # Generate prompt for LLM
+            prompt = f"""
+            You are a data analyst tasked with generating insights from a dataset. Your primary goal is to answer the specific question asked, followed by relevant supporting analysis.
+
+            Original Question:
+            {request.question if request.question else "No specific question provided"}
+
+            Ex: If the question is "What is the average price of the products?", and lets say the df contains value 20, then the answer should be "The average price of the products is 20".
+
+            Dataset Overview:
+            - Total Records: {data_info['total_rows']}
+            - Total Columns: {data_info['total_columns']}
+            - Numeric Columns: {', '.join(data_info['numeric_columns'])}
+            - Categorical Columns: {', '.join(data_info['categorical_columns'])}
+
+            Numeric Statistics:
+            {json.dumps(data_info['numeric_stats'], indent=2)}
+
+            Categorical Statistics:
+            {json.dumps(data_info['categorical_stats'], indent=2)}
+
+            Sample Data (First 5 rows):
+            {json.dumps(data_info['sample_data'], indent=2)}
+
+            Please provide a concise analysis following these guidelines:
+
+            1. Structure your response as follows:
+               ### Direct Answer
+               - Start with a clear, direct answer to the original question
+               - Use `code` blocks for specific numbers and metrics
+               - Use **bold** for key findings
+               - Keep this section focused on answering the question
+
+               ### Supporting Analysis
+               - Provide relevant statistics that support your answer
+               - Use markdown tables for comparing metrics
+               - Include trends that relate to the question
+               Example:
+               ```
+               Metric    | Value
+               ---------|--------
+               Mean     | `123.45`
+               Median   | `120.00`
+               ```
+
+               ### Additional Insights
+               - Share any other relevant patterns or insights
+               - Focus on insights that provide context to the answer
+               - Use > for important notes
+               - Use `code` for specific numbers
+
+            2. Formatting Guidelines:
+               - Use ### for main headers
+               - Use #### for subheaders
+               - Use proper markdown lists with - or *
+               - Use `code` blocks for numbers and metrics
+               - Use **bold** for emphasis on key findings
+               - Use > for important notes
+               - Use proper markdown tables
+               - Use proper markdown code blocks for formulas
+
+            3. For numeric analysis:
+               - Focus on metrics that directly relate to the question
+               - Use markdown tables for relevant correlations
+               - Use `code` blocks for formulas
+               - Format percentages with % symbol
+               Example:
+               ```
+               Correlation = `0.85`
+               Growth Rate = `12.5%`
+               ```
+
+            4. Keep the analysis focused:
+               - Maximum 2-3 bullet points per section
+               - Prioritize information that answers the question
+               - Include only relevant supporting data
+               - Use consistent formatting
+
+            5. Special formatting rules:
+               - Use proper markdown line breaks
+               - Use proper markdown horizontal rules (---)
+               - Use proper markdown blockquotes (>)
+               - Use proper markdown code blocks (```)
+               - Use proper markdown tables
+               - Use proper markdown lists
+
+            Format your response in clean, well-structured markdown.
+            Focus on answering the original question first, then provide supporting analysis.
+            Keep the overall length short and scannable.
+            Ensure all special characters and formatting render properly.
+            Make sure your analysis directly addresses the original question and provides clear, actionable insights.
+            """
+            
+            print("[Inference] Sending request to LLM")
+            response = model.generate_content(prompt)
+            summary = response.text.strip()
+            
+            print("[Inference] Successfully generated summary")
+            return {
+                "status": "success",
+                "summary": summary
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[Inference] Error in LLM processing: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error generating insights: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Inference] Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error in inference generation: {str(e)}") 
