@@ -1,13 +1,13 @@
 # Core dependencies
-fastapi>=0.104.1
-uvicorn>=0.24.0
+fastapi==0.104.1
+uvicorn==0.24.0
 pydantic>=2.4.2
-python-multipart>=0.0.6  # For file uploads
-python-dotenv>=1.0.0
+python-multipart==0.0.6  # For file uploads
+python-dotenv==1.0.0
 
 # Data processing and analysis
-pandas>=2.1.2
-numpy>=1.26.1
+pandas==2.1.3
+numpy==1.26.2
 sqlite3-api>=0.1.0
 
 # Visualization
@@ -15,7 +15,7 @@ matplotlib>=3.8.1
 seaborn>=0.13.0
 
 # LLM and AI
-google-generativeai>=0.3.1
+google-generativeai==0.3.1
 
 # Data loading
 kagglehub>=0.2.0
@@ -30,5 +30,10 @@ statsmodels>=0.14.0  # For statistical models
 pillow>=10.0.0  # For image processing
 scipy>=1.11.3  # For scientific computing
 
-faiss-cpu
-sentence-transformers
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+
+pytest==7.4.3
+httpx==0.25.1
+
+reportlab==4.0.8

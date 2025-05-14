@@ -3,6 +3,11 @@ import requests
 import json
 import pandas as pd
 import base64
+from datetime import datetime
+import io
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import Image
 from config.constants import API_URL
 from utils.cost_utils import update_costs
 from components.python_editor import render_python_editor
@@ -11,6 +16,62 @@ from utils.session_state import init_session_state
 def truncate_text(text, max_length=50):
     """Truncate text to a maximum length."""
     return text[:max_length] + "..." if len(text) > max_length else text
+
+def export_to_pdf(entry):
+    """Export a conversation entry to PDF."""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+
+    # Add title
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, height - 50, "HackBot Analytics - Conversation Export")
+    
+    # Add timestamp
+    c.setFont("Helvetica", 10)
+    c.drawString(50, height - 70, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Add question
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, height - 100, "Question:")
+    c.setFont("Helvetica", 10)
+    c.drawString(50, height - 120, entry['question'])
+    
+    # Add response
+    y_position = height - 160
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y_position, "Response:")
+    c.setFont("Helvetica", 10)
+    
+    # Add analysis type
+    analysis_type = entry['response'].get('analysis_type', 'N/A')
+    c.drawString(50, y_position - 20, f"Analysis Type: {analysis_type}")
+    
+    # Add SQL query if present
+    if 'generated_sql_query' in entry['response']:
+        c.drawString(50, y_position - 40, "SQL Query:")
+        c.setFont("Courier", 8)
+        c.drawString(50, y_position - 60, entry['response']['generated_sql_query'])
+    
+    # Add Python code if present
+    if 'generated_python_script' in entry['response']:
+        c.drawString(50, y_position - 100, "Python Code:")
+        c.setFont("Courier", 8)
+        c.drawString(50, y_position - 120, entry['response']['generated_python_script'])
+    
+    # Add plot if present
+    if 'plot_base64' in entry['response']:
+        try:
+            plot_data = base64.b64decode(entry['response']['plot_base64'].split(',')[-1])
+            img = Image(io.BytesIO(plot_data))
+            img.drawHeight = 300
+            img.drawWidth = 400
+            img.drawOn(c, 50, y_position - 400)
+        except Exception as e:
+            c.drawString(50, y_position - 400, f"Error including plot: {str(e)}")
+    
+    c.save()
+    return buffer.getvalue()
 
 def render_main_page():
     """Render the main page with all its components."""
@@ -81,7 +142,7 @@ def render_main_page():
                     "model_name": st.session_state.selected_model,
                     "user_api_key": st.session_state.gemini_api_key or None,
                     "use_rag_for_schema": st.session_state.use_rag_for_schema,
-                    "use_rag_mode": use_rag_mode  # Add RAG mode to payload
+                    "use_rag_mode": use_rag_mode
                 }
                 api_response_data = None
                 try:
@@ -95,8 +156,10 @@ def render_main_page():
                         api_response_data.get("output_tokens_used", 0),
                         st.session_state.selected_model
                     )
-                    # Store in history
+                    
+                    # Store in history with timestamp
                     st.session_state.chat_history.append({
+                        "timestamp": datetime.now().isoformat(),
                         "question": user_question,
                         "processed_question": processed_question,
                         "response": api_response_data,
@@ -104,6 +167,7 @@ def render_main_page():
                         "sql_only": use_sql_only,
                         "use_rag_mode": use_rag_mode
                     })
+                    
                     # Reset Python editor state for new question
                     st.session_state.python_code_editable = api_response_data.get("generated_python_script", "")
                     st.session_state.show_python_editor = bool(st.session_state.python_code_editable)
@@ -129,105 +193,99 @@ def render_main_page():
         elif not user_question:
             st.warning("Please enter a question.")
 
-    # Display latest response from chat history
+    # Display chat history
     if st.session_state.chat_history:
-        latest_entry = st.session_state.chat_history[-1]
-        api_response_data = latest_entry["response"]
-        question_asked = latest_entry["question"]
-        
-        # Display follow-up questions at the top if available
-        follow_up_questions = api_response_data.get("follow_up_questions", [])
-        if follow_up_questions:
-            st.markdown("#### 💡 Suggested Questions")
-            cols = st.columns(3)  # Use 3 columns for better space utilization
-            for i, question in enumerate(follow_up_questions):
-                with cols[i % 3]:
-                    truncated_question = truncate_text(question)
-                    if st.button(f"Q{i+1}: {truncated_question}", 
-                               key=f"follow_up_{i}", 
-                               use_container_width=True,
-                               help=question):  # Show full question on hover
-                        st.session_state.current_question_to_process = question
-                        st.session_state.user_question_input_key += 1
-                        st.rerun()
-            st.markdown("---")  # Add a separator
+        st.markdown("### 📜 Conversation History")
+        for i, entry in enumerate(reversed(st.session_state.chat_history)):
+            with st.expander(f"Q: {entry['question']} ({datetime.fromisoformat(entry['timestamp']).strftime('%Y-%m-%d %H:%M:%S')})"):
+                # Display question and mode indicators
+                st.markdown(f"#### 🔍 Question: {entry['question']}")
+                advanced_indicator = " (Advanced Mode)" if entry.get("advanced_mode", False) else ""
+                sql_only_indicator = " (SQL Only Mode)" if entry.get("sql_only", False) else ""
+                rag_indicator = " (RAG Mode)" if entry.get("use_rag_mode", False) else ""
+                st.markdown(f"*{advanced_indicator}{sql_only_indicator}{rag_indicator}*")
 
-        # Create a more compact question display
-        st.markdown(f"### 🔍 Question: {question_asked}")
-        advanced_indicator = " (Advanced Mode)" if latest_entry.get("advanced_mode", False) else ""
-        sql_only_indicator = " (SQL Only Mode)" if latest_entry.get("sql_only", False) else ""
-        rag_indicator = " (RAG Mode)" if latest_entry.get("use_rag_mode", False) else ""
-        st.markdown(f"*{advanced_indicator}{sql_only_indicator}{rag_indicator}*")
+                # Debug section
+                if st.toggle("Show Debug Information", key=f"debug_{i}", value=False):
+                    st.json(entry['response'])
 
-        # Debug section (collapsed by default)
-        if st.toggle("Show Debug Information", value=st.session_state.get("show_debug", False)):
-            st.json(api_response_data)
+                api_response_data = entry['response']
+                analysis_type = api_response_data.get("analysis_type")
 
-        analysis_type = api_response_data.get("analysis_type")
+                if analysis_type == "sql":
+                    st.markdown("#### 📊 SQL Analysis")
+                    st.code(api_response_data.get('generated_sql_query', 'No SQL query generated.'), language="sql")
 
-        if analysis_type == "sql":
-            st.markdown("#### 📊 SQL Analysis")
-            st.code(api_response_data.get('generated_sql_query', 'No SQL query generated.'), language="sql")
-
-            results_table = api_response_data.get('results_table')
-            plot_b64 = api_response_data.get('plot_base64')
-            
-            if plot_b64:
-                try:
-                    if ',' in plot_b64: header, encoded = plot_b64.split(",", 1)
-                    else: encoded = plot_b64
-                    plot_image_bytes = base64.b64decode(encoded)
-                    st.image(plot_image_bytes, caption=f"Generated Plot (Type: {api_response_data.get('chart_type', 'N/A')})", use_container_width=True)
-                except Exception as img_e:
-                    st.error(f"Error displaying SQL plot: {img_e}")
-
-            if results_table is not None:
-                if results_table:
-                    st.markdown("#### 📋 Results Table")
-                    try:
-                        df_results = pd.DataFrame(results_table)
-                        st.dataframe(df_results, use_container_width=True)
-                        
-                        # Generate inference automatically
-                        with st.spinner("Generating data insights..."):
-                            try:
-                                inference_payload = {
-                                    "data": results_table,
-                                    "max_rows": 50,
-                                    "user_api_key": st.session_state.gemini_api_key or None,
-                                    "question": question_asked  # Add the question to the payload
-                                }
-                                inference_response = requests.post(
-                                    f"{API_URL}/generate-inference/",
-                                    json=inference_payload,
-                                    timeout=60
+                    results_table = api_response_data.get('results_table')
+                    plot_b64 = api_response_data.get('plot_base64')
+                    
+                    if plot_b64:
+                        try:
+                            if ',' in plot_b64: header, encoded = plot_b64.split(",", 1)
+                            else: encoded = plot_b64
+                            plot_image_bytes = base64.b64decode(encoded)
+                            st.image(plot_image_bytes, caption=f"Generated Plot (Type: {api_response_data.get('chart_type', 'N/A')})", use_container_width=True)
+                            
+                            # Add export to PDF button
+                            if st.button("📥 Export to PDF", key=f"export_{i}"):
+                                pdf_bytes = export_to_pdf(entry)
+                                st.download_button(
+                                    label="Download PDF",
+                                    data=pdf_bytes,
+                                    file_name=f"hackbot_analysis_{datetime.fromisoformat(entry['timestamp']).strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_{i}"
                                 )
-                                inference_response.raise_for_status()
-                                inference_data = inference_response.json()
+                        except Exception as img_e:
+                            st.error(f"Error displaying SQL plot: {img_e}")
+
+                    if results_table is not None:
+                        if results_table:
+                            st.markdown("#### 📋 Results Table")
+                            try:
+                                df_results = pd.DataFrame(results_table)
+                                st.dataframe(df_results, use_container_width=True)
                                 
-                                if inference_data["status"] == "success":
-                                    st.markdown("#### 📊 Data Insights")
-                                    st.markdown(inference_data["summary"])
-                            except Exception as e:
-                                st.error(f"Error generating data insights: {str(e)}")
-                    except Exception as df_e:
-                        st.error(f"Error displaying results table: {df_e}")
-                        st.json(results_table)
-                elif plot_b64 is None:
-                    st.info("SQL query executed, but no tabular data was returned and no plot was generated.")
-            elif plot_b64 is None:
-                st.info("No tabular data or plot to display for SQL execution.")
+                                # Generate inference automatically
+                                with st.spinner("Generating data insights..."):
+                                    try:
+                                        inference_payload = {
+                                            "data": results_table,
+                                            "max_rows": 50,
+                                            "user_api_key": st.session_state.gemini_api_key or None,
+                                            "question": entry['question']
+                                        }
+                                        inference_response = requests.post(
+                                            f"{API_URL}/generate-inference/",
+                                            json=inference_payload,
+                                            timeout=60
+                                        )
+                                        inference_response.raise_for_status()
+                                        inference_data = inference_response.json()
+                                        
+                                        if inference_data["status"] == "success":
+                                            st.markdown("#### 📊 Data Insights")
+                                            st.markdown(inference_data["summary"])
+                                    except Exception as e:
+                                        st.error(f"Error generating data insights: {str(e)}")
+                            except Exception as df_e:
+                                st.error(f"Error displaying results table: {df_e}")
+                                st.json(results_table)
+                        elif plot_b64 is None:
+                            st.info("SQL query executed, but no tabular data was returned and no plot was generated.")
+                    elif plot_b64 is None:
+                        st.info("No tabular data or plot to display for SQL execution.")
 
-        elif analysis_type == "python":
-            st.markdown("#### 🐍 Python Analysis")
-            generated_python_script = api_response_data.get("generated_python_script")
-            if generated_python_script:
-                render_python_editor(generated_python_script)
+                elif analysis_type == "python":
+                    st.markdown("#### 🐍 Python Analysis")
+                    generated_python_script = api_response_data.get("generated_python_script")
+                    if generated_python_script:
+                        render_python_editor(generated_python_script)
 
-        elif analysis_type == "complex":
-            st.warning(f"Complex Analysis: {api_response_data.get('reason_if_not_sql_or_python', 'This question requires a more complex approach than currently supported.')}")
-        
-        elif analysis_type == "error" or api_response_data.get("reason_if_not_sql_or_python"):
-            st.error(f"Analysis Error: {api_response_data.get('reason_if_not_sql_or_python', 'Could not process the request.')}")
+                elif analysis_type == "complex":
+                    st.warning(f"Complex Analysis: {api_response_data.get('reason_if_not_sql_or_python', 'This question requires a more complex approach than currently supported.')}")
+                
+                elif analysis_type == "error" or api_response_data.get("reason_if_not_sql_or_python"):
+                    st.error(f"Analysis Error: {api_response_data.get('reason_if_not_sql_or_python', 'Could not process the request.')}")
 
         st.divider()
