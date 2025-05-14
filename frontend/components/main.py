@@ -60,13 +60,19 @@ def export_to_pdf(entry):
         c.drawString(50, y_position - 120, entry['response']['generated_python_script'])
     
     # Add plot if present
-    if 'plot_base64' in entry['response']:
+    plot_b64 = entry['response'].get('plot_base64')
+    if plot_b64:
         try:
-            plot_data = base64.b64decode(entry['response']['plot_base64'].split(',')[-1])
-            img = Image(io.BytesIO(plot_data))
-            img.drawHeight = 300
-            img.drawWidth = 400
-            img.drawOn(c, 50, y_position - 400)
+            # Handle both raw base64 and data URL formats
+            if isinstance(plot_b64, str):
+                if ',' in plot_b64:
+                    # Remove data URL prefix if present
+                    plot_b64 = plot_b64.split(',')[-1]
+                plot_data = base64.b64decode(plot_b64)
+                img = Image(io.BytesIO(plot_data))
+                img.drawHeight = 300
+                img.drawWidth = 400
+                img.drawOn(c, 50, y_position - 400)
         except Exception as e:
             c.drawString(50, y_position - 400, f"Error including plot: {str(e)}")
     
@@ -219,23 +225,23 @@ def render_main_page():
                     results_table = api_response_data.get('results_table')
                     plot_b64 = api_response_data.get('plot_base64')
                     
+                    # Add export to PDF button at the top of the analysis
+                    if st.button("📥 Export to PDF", key=f"export_{i}"):
+                        pdf_bytes = export_to_pdf(entry)
+                        st.download_button(
+                            label="Download PDF",
+                            data=pdf_bytes,
+                            file_name=f"hackbot_analysis_{datetime.fromisoformat(entry['timestamp']).strftime('%Y%m%d_%H%M%S')}.pdf",
+                            mime="application/pdf",
+                            key=f"download_{i}"
+                        )
+                    
                     if plot_b64:
                         try:
                             if ',' in plot_b64: header, encoded = plot_b64.split(",", 1)
                             else: encoded = plot_b64
                             plot_image_bytes = base64.b64decode(encoded)
                             st.image(plot_image_bytes, caption=f"Generated Plot (Type: {api_response_data.get('chart_type', 'N/A')})", use_container_width=True)
-                            
-                            # Add export to PDF button
-                            if st.button("📥 Export to PDF", key=f"export_{i}"):
-                                pdf_bytes = export_to_pdf(entry)
-                                st.download_button(
-                                    label="Download PDF",
-                                    data=pdf_bytes,
-                                    file_name=f"hackbot_analysis_{datetime.fromisoformat(entry['timestamp']).strftime('%Y%m%d_%H%M%S')}.pdf",
-                                    mime="application/pdf",
-                                    key=f"download_{i}"
-                                )
                         except Exception as img_e:
                             st.error(f"Error displaying SQL plot: {img_e}")
 
