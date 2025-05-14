@@ -43,7 +43,7 @@ def generate_query_analysis_prompt(question: str, schema_context: str, semantic_
         "3. Determine the best analysis type based on these strict criteria:",
         "   - Use 'sql' if ANY of these are true:",
         "     * The question can be answered with standard SQL operations (SELECT, JOIN, GROUP BY, etc.)",
-        "     * The data can be aggregated and filtered using SQL functions",
+        "     * The data can be aggregated and filtered using SQL functions, and functions like standard deviation etc are not asked to perform",
         "     * The visualization can be created from the SQL results directly",
         "     * The analysis involves basic data retrieval or filtering",
         "     * The question asks for counts, sums, averages, or other basic aggregations",
@@ -71,6 +71,9 @@ def generate_query_analysis_prompt(question: str, schema_context: str, semantic_
         "       - execute_sql_with_validation(query: str) -> pd.DataFrame",
         "       - save_plot_with_validation(fig: plt.Figure, title: str = None) -> None",
         "       - print_error_summary(error: Exception) -> None",
+        "       - print_data(dataframes: List) -> None",
+        "           In this print_data function a list should be passed for the tables which needs to be shown to the user",
+        "           Each element of list is a dict with two fields - title: the table title to be shown and df: the table df to be shown",
         "     * Prints results in a clear, structured format",
         "     * Saves plots using save_plot_with_validation()",
         "     * If there are multiple plots, then make all of them as sub plots and then save a single plot using save_plot_validation() function",
@@ -108,9 +111,12 @@ def generate_code_fix_prompt(code: str, error: str) -> str:
         - execute_sql_with_validation(query: str) -> pd.DataFrame
         - save_plot_with_validation(fig: plt.Figure, title: str = None) -> None
         - print_error_summary(error: Exception) -> None
+        - print_data(dataframes: List) -> None
+            In this print_data function a list should be passed for the tables which needs to be shown to the user
+            Each element of list is a dict with two fields - title: the table title to be shown and df: the table df to be shown
 
         Do not redefine these functions, just use them.
-        Always include visualization unless explicitly not needed.
+        Always include visualization unless explicitly not needed. for visualizations, DO NOT use tight_layout function anywhere
         Use proper error handling.
 
         Original code:

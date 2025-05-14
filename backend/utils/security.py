@@ -88,7 +88,6 @@ def save_plot_with_validation(fig: plt.Figure, title: str = None) -> None:
     try:
         if title:
             fig.suptitle(title, fontsize=16, y=1.02)
-        fig.tight_layout()
         fig.savefig(PLOT_OUTPUT_PATH, dpi=300, bbox_inches='tight')
         plt.close(fig)
     except Exception as e:
@@ -102,6 +101,16 @@ def print_error_summary(error: Exception) -> None:
     print(f"Message: {{str(error)}}")
     print(f"\\nTraceback:")
     print(traceback.format_exc())
+
+def print_data(dataframes) -> None:
+    output = {{}}
+    for i, df in enumerate(dataframes):
+        if isinstance(df['df'], pd.DataFrame):
+            output[df['title']] = df['df'].to_dict(orient='records')
+
+    print("DATAFRAME_OUTPUT_START")
+    print(json.dumps(output))
+    print("DATAFRAME_OUTPUT_END")
 
 # Main execution wrapper
 try:

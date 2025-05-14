@@ -5,6 +5,7 @@ import pandas as pd
 import base64
 import time
 from config.constants import API_URL
+import json
 
 def handle_fix_button_click():
     """Callback function for the Fix with AI button"""
@@ -83,6 +84,7 @@ def execute_python_script(code, max_retries=4):
                 if not error_message and has_error_summary:
                     error_message = output_text
                 if retry_count < max_retries - 1:
+                    # print(error_message)
                     st.warning(f"Attempt {retry_count + 1} failed. Retrying with AI fix...")
                     fix_payload = {
                         "code": code,
@@ -130,12 +132,31 @@ def execute_python_script_debug(code):
 def render_python_editor(generated_python_script):
     """Render the Python code editor with execution functionality."""
     if generated_python_script:
+        # Initialize required session state variables if not present
+        if "code_execution_requested" not in st.session_state:
+            st.session_state.code_execution_requested = False
+        
+        if "first_load" not in st.session_state:
+            st.session_state.first_load = True
+            # Default to debug mode on first load/page refresh
+            st.session_state.edit_mode = True
+            
         # Add edit/debug mode toggle
+        previous_mode = st.session_state.get("edit_mode", True)
         st.session_state.edit_mode = st.toggle(
             "Edit/Debug Mode", 
-            value=st.session_state.get("edit_mode", False),
+            value=st.session_state.get("edit_mode", True),
             help="Toggle between automatic execution with AI fixes and manual edit/debug mode"
         )
+        
+        # Detect mode change
+        if previous_mode != st.session_state.edit_mode:
+            # Mode switched - clear execution flag
+            st.session_state.code_execution_requested = False
+            # If switching to auto mode, set flag to execute
+            if not st.session_state.edit_mode:
+                st.session_state.code_execution_requested = True
+                st.rerun()
 
         if st.session_state.edit_mode:
             # Show code editor in edit mode
@@ -187,15 +208,32 @@ def render_python_editor(generated_python_script):
                                    on_click=handle_fix_button_click):
                             pass
         else:
-            # Automatic execution mode
+            # Automatic execution mode - but only run when explicitly requested
             st.info("Running in automatic mode. The code will be executed and automatically fixed if needed.")
-            with st.spinner("Executing Python script with automatic fixes..."):
-                python_run_results, error = execute_python_script(generated_python_script)
+            
+            if st.session_state.code_execution_requested:
+                with st.spinner("Executing Python script with automatic fixes..."):
+                    # Clear flag immediately to prevent re-execution
+                    st.session_state.code_execution_requested = False
+                    
+                    python_run_results, error = execute_python_script(generated_python_script)
+                    
+                    if error:
+                        st.error(f"Failed to execute script after maximum retries: {error}")
+                        # Switch back to debug mode after failure
+                        st.session_state.edit_mode = True
+                        st.session_state.show_python_editor = True
+                        st.rerun()
+                    else:
+                        display_python_results(python_run_results)
+            else:
+                # Display a button to execute the code
+                if st.button("▶️ Run Auto-fix Script", key="auto_run_python_button"):
+                    st.session_state.code_execution_requested = True
+                    st.rerun()
                 
-                if error:
-                    st.error(f"Failed to execute script after maximum retries: {error}")
-                else:
-                    display_python_results(python_run_results)
+        # Reset first load flag
+        st.session_state.first_load = False
 
 def display_python_results(python_run_results):
     """Display the results of Python script execution."""
@@ -219,31 +257,19 @@ def display_python_results(python_run_results):
         else:
             st.error("Python script execution encountered an error.")
 
-        output_text = python_run_results.get("output", "")
-        # Remove 'None' output
-        if output_text is not None and output_text.strip().lower() == "none":
-            output_text = ""
+        output = python_run_results.get("output", "")
 
-        # Find all DataFrame JSON blocks
-        df_json_matches = list(re.finditer(r"PYTHON_DF_RESULT_JSON_START>>>(.*?)<<<PYTHON_DF_RESULT_JSON_END", output_text, re.DOTALL))
-        shown_any_table = False
-        for match in df_json_matches:
-            df_json_str = match.group(1)
+        if output is not None:
             try:
-                py_df = pd.read_json(df_json_str, orient='records')
-                st.dataframe(py_df, use_container_width=True, height=400)
-                shown_any_table = True
-            except Exception as parse_df_e:
-                st.error(f"Could not parse DataFrame from Python script output: {parse_df_e}")
-                st.text("Raw DataFrame JSON (if any):\n" + df_json_str)
-        # Remove all DataFrame JSON blocks from output_text
-        for match in df_json_matches:
-            output_text = output_text.replace(match.group(0), "")
-
-        # Show printed output behind a toggle if any
-        if output_text.strip():
-            with st.expander("Show Raw Output (stdout)", expanded=False):
-                st.code(output_text.strip(), language="text")
+                output_json = json.loads(output)
+                for key, value in output_json.items():
+                    st.markdown(f"#### {key}")
+                    st.dataframe(pd.DataFrame(value), use_container_width=True, height=400)
+            except json.JSONDecodeError:
+                # Not valid JSON, display as text
+                if output:
+                    st.markdown("##### Script Output (stdout):")
+                    st.code(output, language="text")
 
         # Show error output if any
         if python_run_results.get("error"):
@@ -254,11 +280,11 @@ def display_python_results(python_run_results):
             st.session_state.current_error_message = None
 
         # Show error summary if present in output
-        if "Error Summary:" in output_text:
+        if output and "Error Summary:" in output:
             st.markdown("##### Error from Script Output:")
-            st.code(output_text, language="text")
+            st.code(output, language="text")
             if not st.session_state.current_error_message:
-                st.session_state.current_error_message = output_text
+                st.session_state.current_error_message = output
 
         python_plot_b64 = python_run_results.get("plot_base64")
         if python_plot_b64:
@@ -270,4 +296,4 @@ def display_python_results(python_run_results):
                 st.image(py_plot_bytes, caption="Plot generated by Python script", use_container_width=True)
             except Exception as py_img_e:
                 st.error(f"Error displaying Python plot: {py_img_e}")
-        st.markdown('</div>', unsafe_allow_html=True) 
+        st.markdown('</div>', unsafe_allow_html=True)

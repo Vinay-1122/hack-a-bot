@@ -1,5 +1,5 @@
 # API Configuration
-API_URL = "http://127.0.0.1:8001/api"  # Your FastAPI backend URL
+API_URL = "http://127.0.0.1:8001/api"
 
 # Model Pricing Configuration
 MODEL_PRICING_PER_MILLION_TOKENS = {

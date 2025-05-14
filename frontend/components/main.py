@@ -6,9 +6,11 @@ import base64
 from config.constants import API_URL
 from utils.cost_utils import update_costs
 from components.python_editor import render_python_editor
+from utils.session_state import init_session_state
 
 def render_main_page():
     """Render the main page with all its components."""
+    init_session_state()
     st.title("🤖 Welcome to HackBot Analytics")
     st.markdown("Ask questions about your data in natural language. Load data and configure settings in the sidebar.")
 
@@ -27,10 +29,24 @@ def render_main_page():
     if "current_question_to_process" in st.session_state:
         del st.session_state["current_question_to_process"]
 
-    if st.button("🔍 Ask Gemini", use_container_width=True, type="primary", disabled=not st.session_state.db_initialized):
+    # Create a layout with two columns for the button and checkbox
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        use_advanced_mode = st.checkbox("Advanced", help="Forces Python analysis with enhanced schema awareness")
+    
+    with col1:
+        ask_button = st.button("🔍 Ask Gemini", use_container_width=True, type="primary", disabled=not st.session_state.db_initialized)
+
+    if ask_button:
         if not st.session_state.db_initialized:
             st.error("Please load data into the database before asking questions.")
         elif user_question:
+            # Modify the question if advanced mode is checked
+            processed_question = user_question
+            if use_advanced_mode:
+                processed_question += " Use python for this analysis, please be careful while generating the python code and use the helper functions that are available and make sure to use the schema details for proper references."
+            
             # Validate semantic schema JSON before sending
             try:
                 json.loads(st.session_state.current_semantic_schema)
@@ -40,7 +56,7 @@ def render_main_page():
 
             with st.spinner(f"Thinking with {st.session_state.selected_model}..."):
                 payload = {
-                    "question": user_question,
+                    "question": processed_question,
                     "semantic_schema_json": st.session_state.current_semantic_schema,
                     "model_name": st.session_state.selected_model,
                     "user_api_key": st.session_state.gemini_api_key or None,
@@ -60,8 +76,10 @@ def render_main_page():
                     )
                     # Store in history
                     st.session_state.chat_history.append({
-                        "question": user_question,
-                        "response": api_response_data
+                        "question": user_question,  # Store original question for display
+                        "processed_question": processed_question,  # Store the processed question with advanced directive if used
+                        "response": api_response_data,
+                        "advanced_mode": use_advanced_mode  # Store whether advanced mode was used
                     })
                     # Reset Python editor state for new question
                     st.session_state.python_code_editable = api_response_data.get("generated_python_script", "")
@@ -93,13 +111,16 @@ def render_main_page():
         latest_entry = st.session_state.chat_history[-1]
         api_response_data = latest_entry["response"]
         question_asked = latest_entry["question"]
-
-        st.markdown(f"### Results for: *\"{question_asked}\"*")
+        
+        # Optionally show if advanced mode was used
+        advanced_indicator = " (Advanced Mode)" if latest_entry.get("advanced_mode", False) else ""
+        st.markdown(f"### Results for: *\"{question_asked}\"*{advanced_indicator}")
 
         st.subheader("🧠 Thinking Steps (from LLM)")
         st.markdown(f"> {api_response_data.get('thinking_steps', 'N/A')}")
 
         analysis_type = api_response_data.get("analysis_type")
+        inference = api_response_data.get('simple_summary_inference', 'N/A')
 
         if analysis_type == "sql":
             st.subheader("Generated SQL Query")
@@ -147,6 +168,6 @@ def render_main_page():
             st.error(f"Analysis Error: {api_response_data.get('reason_if_not_sql_or_python', 'Could not process the request.')}")
 
         st.subheader("📝 LLM's Simple Summary / Inference")
-        st.markdown(api_response_data.get('simple_summary_inference', 'N/A'))
+        st.markdown(inference)
 
-        st.divider() 
+        st.divider()
