@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  plot-service:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for DinD
+      - /tmp:/tmp
+    depends_on:
+      - plot-executor-build
+    restart: unless-stopped
+    privileged: true  # Required for Docker access
+
+  plot-executor-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.execution
+    image: plot-executor:latest
+    command: ["echo", "Execution image built successfully"] 
